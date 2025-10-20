@@ -54,3 +54,13 @@ test-output/
 local_test.py
 test_*.png
 !2025-10-15_20h43_56.png
+
+# Terraform
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/*.tfvars
+terraform/*.zip
+terraform/.terraformrc
+terraform/terraform.rc
