@@ -1,0 +1,92 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Simple Timesheet OCR System - 5 minute deployment
+
+Globals:
+  Function:
+    Timeout: 300
+    MemorySize: 1024
+    Runtime: python3.13
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    Description: Environment name (dev/staging/prod)
+
+Resources:
+  # Input S3 Bucket
+  InputBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'timesheetocr-input-${Environment}-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  # Output S3 Bucket
+  OutputBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'timesheetocr-output-${Environment}-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  # Lambda Function
+  OCRFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'TimesheetOCR-ocr-${Environment}'
+      CodeUri: src/
+      Handler: lambda_function.lambda_handler
+      Environment:
+        Variables:
+          OUTPUT_BUCKET: !Ref OutputBucket
+          MODEL_ID: 'us.anthropic.claude-sonnet-4-5-v1:0'
+          MAX_TOKENS: '4096'
+          ENVIRONMENT: !Ref Environment
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref InputBucket
+        - S3CrudPolicy:
+            BucketName: !Ref OutputBucket
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource: !Sub 'arn:aws:bedrock:us-east-1::foundation-model/us.anthropic.claude-sonnet-4-5-v1:0'
+      Events:
+        S3Event:
+          Type: S3
+          Properties:
+            Bucket: !Ref InputBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: suffix
+                    Value: .png
+
+Outputs:
+  InputBucketName:
+    Description: Input S3 bucket for timesheet images
+    Value: !Ref InputBucket
+  OutputBucketName:
+    Description: Output S3 bucket for CSV files
+    Value: !Ref OutputBucket
+  FunctionArn:
+    Description: Lambda Function ARN
+    Value: !GetAtt OCRFunction.Arn

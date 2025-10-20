@@ -1,0 +1,35 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "timesheetocr-dev"
+resolve_s3 = true
+s3_prefix = "timesheetocr-dev"
+region = "us-east-1"
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "Environment=dev"
+image_repositories = []
+
+[dev.deploy.parameters]
+stack_name = "timesheetocr-dev"
+resolve_s3 = true
+s3_prefix = "timesheetocr-dev"
+region = "us-east-1"
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "Environment=dev"
+
+[staging.deploy.parameters]
+stack_name = "timesheetocr-staging"
+resolve_s3 = true
+s3_prefix = "timesheetocr-staging"
+region = "us-east-1"
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "Environment=staging AlarmEmail=your-email@example.com"
+
+[prod.deploy.parameters]
+stack_name = "timesheetocr-prod"
+resolve_s3 = true
+s3_prefix = "timesheetocr-prod"
+region = "us-east-1"
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "Environment=prod AlarmEmail=your-email@example.com"
+confirm_changeset = true

@@ -1,0 +1,489 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Production-Ready Timesheet OCR System with Claude Sonnet 4.5
+Globals:
+  Function:
+    Timeout: 300
+    MemorySize: 1024
+    Runtime: python3.13
+    Tracing: Active
+    Tags:
+      Project: TimesheetOCR
+      ManagedBy: SAM
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+    - dev
+    - staging
+    - prod
+    Description: Environment name
+  AlarmEmail:
+    Type: String
+    Default: ''
+    Description: Email for CloudWatch alarms (optional)
+Conditions:
+  HasAlarmEmail:
+    Fn::Not:
+    - Fn::Equals:
+      - Ref: AlarmEmail
+      - ''
+  IsProduction:
+    Fn::Equals:
+    - Ref: Environment
+    - prod
+Resources:
+  InputBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Sub: timesheetocr-input-${Environment}-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+        - Id: DeleteOldImages
+          Status: Enabled
+          ExpirationInDays: 90
+          NoncurrentVersionExpirationInDays: 30
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+      - Key: Environment
+        Value:
+          Ref: Environment
+      - Key: CostCenter
+        Value: TimesheetOCR
+      - Key: DataClassification
+        Value: Internal
+  OutputBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Sub: timesheetocr-output-${Environment}-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+        - Id: TransitionToIA
+          Status: Enabled
+          Transitions:
+          - TransitionInDays: 30
+            StorageClass: STANDARD_IA
+          - TransitionInDays: 180
+            StorageClass: GLACIER
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+      - Key: Environment
+        Value:
+          Ref: Environment
+      - Key: CostCenter
+        Value: TimesheetOCR
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName:
+        Fn::Sub: TimesheetOCR-dlq-${Environment}
+      MessageRetentionPeriod: 1209600
+      Tags:
+      - Key: Environment
+        Value:
+          Ref: Environment
+      - Key: Purpose
+        Value: DeadLetterQueue
+  TimesheetTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName:
+        Fn::Sub: TimesheetOCR-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: ResourceName
+        AttributeType: S
+      - AttributeName: DateProjectCode
+        AttributeType: S
+      - AttributeName: ProjectCodeGSI
+        AttributeType: S
+      - AttributeName: YearMonth
+        AttributeType: S
+      KeySchema:
+      - AttributeName: ResourceName
+        KeyType: HASH
+      - AttributeName: DateProjectCode
+        KeyType: RANGE
+      GlobalSecondaryIndexes:
+      - IndexName: ProjectCodeIndex
+        KeySchema:
+        - AttributeName: ProjectCodeGSI
+          KeyType: HASH
+        - AttributeName: DateProjectCode
+          KeyType: RANGE
+        Projection:
+          ProjectionType: ALL
+      - IndexName: YearMonthIndex
+        KeySchema:
+        - AttributeName: YearMonth
+          KeyType: HASH
+        - AttributeName: ResourceName
+          KeyType: RANGE
+        Projection:
+          ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled:
+          Fn::If:
+          - IsProduction
+          - true
+          - false
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+      - Key: Environment
+        Value:
+          Ref: Environment
+      - Key: CostCenter
+        Value: TimesheetOCR
+  OCRFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: TimesheetOCR-ocr-${Environment}
+      CodeUri: s3://aws-sam-cli-managed-default-samclisourcebucket-cnqxpqgbzslf/3755b94911db33cfdba91b543b15135c
+      Handler: lambda_function.lambda_handler
+      Description: OCR processing for timesheet images using Claude Sonnet 4.5
+      ReservedConcurrentExecutions:
+        Fn::If:
+        - IsProduction
+        - 50
+        - 10
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn:
+          Fn::GetAtt:
+          - DeadLetterQueue
+          - Arn
+      Environment:
+        Variables:
+          OUTPUT_BUCKET:
+            Ref: OutputBucket
+          DYNAMODB_TABLE:
+            Ref: TimesheetTable
+          MODEL_ID: us.anthropic.claude-sonnet-4-5-v1:0
+          MAX_TOKENS: '4096'
+          ENVIRONMENT:
+            Ref: Environment
+      Policies:
+      - S3ReadPolicy:
+          BucketName:
+            Ref: InputBucket
+      - S3CrudPolicy:
+          BucketName:
+            Ref: OutputBucket
+      - DynamoDBCrudPolicy:
+          TableName:
+            Ref: TimesheetTable
+      - Statement:
+        - Effect: Allow
+          Action:
+          - bedrock:InvokeModel
+          Resource:
+          - Fn::Sub: arn:aws:bedrock:us-east-1::foundation-model/us.anthropic.claude-sonnet-4-5-v1:0
+          - Fn::Sub: arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-4-opus-*
+        - Effect: Allow
+          Action:
+          - sqs:SendMessage
+          Resource:
+            Fn::GetAtt:
+            - DeadLetterQueue
+            - Arn
+      Events:
+        S3Event:
+          Type: S3
+          Properties:
+            Bucket:
+              Ref: InputBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                - Name: suffix
+                  Value: .png
+        S3EventJpg:
+          Type: S3
+          Properties:
+            Bucket:
+              Ref: InputBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                - Name: suffix
+                  Value: .jpg
+      Tags:
+        Environment:
+          Ref: Environment
+        CostCenter: TimesheetOCR
+    Metadata:
+      SamResourceId: OCRFunction
+  ReportFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: TimesheetOCR-report-${Environment}
+      CodeUri: s3://aws-sam-cli-managed-default-samclisourcebucket-cnqxpqgbzslf/3755b94911db33cfdba91b543b15135c
+      Handler: report_lambda.lambda_handler
+      Description: Generate timesheet reports and calendar views
+      Environment:
+        Variables:
+          DYNAMODB_TABLE:
+            Ref: TimesheetTable
+          ENVIRONMENT:
+            Ref: Environment
+      Policies:
+      - DynamoDBReadPolicy:
+          TableName:
+            Ref: TimesheetTable
+      Events:
+        GetResources:
+          Type: Api
+          Properties:
+            Path: /resources
+            Method: GET
+            RestApiId:
+              Ref: ReportApi
+        GetReport:
+          Type: Api
+          Properties:
+            Path: /report/{resource_name}
+            Method: GET
+            RestApiId:
+              Ref: ReportApi
+        GetReportHtml:
+          Type: Api
+          Properties:
+            Path: /report/{resource_name}/html
+            Method: GET
+            RestApiId:
+              Ref: ReportApi
+      Tags:
+        Environment:
+          Ref: Environment
+        CostCenter: TimesheetOCR
+    Metadata:
+      SamResourceId: ReportFunction
+  ReportApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name:
+        Fn::Sub: TimesheetOCR-API-${Environment}
+      StageName:
+        Ref: Environment
+      Cors:
+        AllowMethods: "'GET,OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: "'*'"
+      Tags:
+        Environment:
+          Ref: Environment
+        CostCenter: TimesheetOCR
+  OCRFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName:
+        Fn::Sub: /aws/lambda/TimesheetOCR-ocr-${Environment}
+      RetentionInDays:
+        Fn::If:
+        - IsProduction
+        - 90
+        - 30
+  ReportFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName:
+        Fn::Sub: /aws/lambda/TimesheetOCR-report-${Environment}
+      RetentionInDays:
+        Fn::If:
+        - IsProduction
+        - 90
+        - 30
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Condition: HasAlarmEmail
+    Properties:
+      TopicName:
+        Fn::Sub: TimesheetOCR-alarms-${Environment}
+      Subscription:
+      - Endpoint:
+          Ref: AlarmEmail
+        Protocol: email
+      Tags:
+      - Key: Environment
+        Value:
+          Ref: Environment
+  FunctionErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasAlarmEmail
+    Properties:
+      AlarmName:
+        Fn::Sub: TimesheetOCR-errors-${Environment}
+      AlarmDescription: Triggers when Lambda function has errors
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+      - Name: FunctionName
+        Value:
+          Ref: OCRFunction
+      AlarmActions:
+      - Ref: AlarmTopic
+      TreatMissingData: notBreaching
+  FunctionThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasAlarmEmail
+    Properties:
+      AlarmName:
+        Fn::Sub: TimesheetOCR-throttles-${Environment}
+      AlarmDescription: Triggers when Lambda function is throttled
+      MetricName: Throttles
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+      - Name: FunctionName
+        Value:
+          Ref: OCRFunction
+      AlarmActions:
+      - Ref: AlarmTopic
+      TreatMissingData: notBreaching
+  DLQMessageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasAlarmEmail
+    Properties:
+      AlarmName:
+        Fn::Sub: TimesheetOCR-dlq-messages-${Environment}
+      AlarmDescription: Triggers when messages appear in Dead Letter Queue
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+      - Name: QueueName
+        Value:
+          Fn::GetAtt:
+          - DeadLetterQueue
+          - QueueName
+      AlarmActions:
+      - Ref: AlarmTopic
+      TreatMissingData: notBreaching
+  Dashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName:
+        Fn::Sub: TimesheetOCR-${Environment}
+      DashboardBody:
+        Fn::Sub: "{\n  \"widgets\": [\n    {\n      \"type\": \"metric\",\n      \"\
+          properties\": {\n        \"metrics\": [\n          [\"AWS/Lambda\", \"Invocations\"\
+          , {\"stat\": \"Sum\", \"label\": \"Invocations\"}],\n          [\".\", \"\
+          Errors\", {\"stat\": \"Sum\", \"label\": \"Errors\"}],\n          [\".\"\
+          , \"Throttles\", {\"stat\": \"Sum\", \"label\": \"Throttles\"}]\n      \
+          \  ],\n        \"view\": \"timeSeries\",\n        \"stacked\": false,\n\
+          \        \"region\": \"${AWS::Region}\",\n        \"title\": \"Lambda Metrics\"\
+          ,\n        \"period\": 300,\n        \"dimensions\": {\n          \"FunctionName\"\
+          : [\"${OCRFunction}\"]\n        }\n      }\n    },\n    {\n      \"type\"\
+          : \"metric\",\n      \"properties\": {\n        \"metrics\": [\n       \
+          \   [\"AWS/Lambda\", \"Duration\", {\"stat\": \"Average\", \"label\": \"\
+          Avg Duration\"}],\n          [\"...\", {\"stat\": \"Maximum\", \"label\"\
+          : \"Max Duration\"}]\n        ],\n        \"view\": \"timeSeries\",\n  \
+          \      \"stacked\": false,\n        \"region\": \"${AWS::Region}\",\n  \
+          \      \"title\": \"Lambda Duration\",\n        \"period\": 300,\n     \
+          \   \"yAxis\": {\n          \"left\": {\n            \"label\": \"Milliseconds\"\
+          \n          }\n        },\n        \"dimensions\": {\n          \"FunctionName\"\
+          : [\"${OCRFunction}\"]\n        }\n      }\n    },\n    {\n      \"type\"\
+          : \"metric\",\n      \"properties\": {\n        \"metrics\": [\n       \
+          \   [\"AWS/SQS\", \"ApproximateNumberOfMessagesVisible\", {\"stat\": \"\
+          Average\"}]\n        ],\n        \"view\": \"timeSeries\",\n        \"stacked\"\
+          : false,\n        \"region\": \"${AWS::Region}\",\n        \"title\": \"\
+          Dead Letter Queue Messages\",\n        \"period\": 300,\n        \"dimensions\"\
+          : {\n          \"QueueName\": [\"${DeadLetterQueue.QueueName}\"]\n     \
+          \   }\n      }\n    }\n  ]\n}\n"
+Outputs:
+  InputBucketName:
+    Description: Input S3 bucket for timesheet images
+    Value:
+      Ref: InputBucket
+    Export:
+      Name:
+        Fn::Sub: TimesheetOCR-InputBucket-${Environment}
+  OutputBucketName:
+    Description: Output S3 bucket for CSV files
+    Value:
+      Ref: OutputBucket
+    Export:
+      Name:
+        Fn::Sub: TimesheetOCR-OutputBucket-${Environment}
+  FunctionArn:
+    Description: Lambda Function ARN
+    Value:
+      Fn::GetAtt:
+      - OCRFunction
+      - Arn
+    Export:
+      Name:
+        Fn::Sub: TimesheetOCR-FunctionArn-${Environment}
+  DeadLetterQueueUrl:
+    Description: Dead Letter Queue URL
+    Value:
+      Ref: DeadLetterQueue
+    Export:
+      Name:
+        Fn::Sub: TimesheetOCR-DLQ-${Environment}
+  DashboardUrl:
+    Description: CloudWatch Dashboard URL
+    Value:
+      Fn::Sub: https://console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=TimesheetOCR-${Environment}
+  DynamoDBTableName:
+    Description: DynamoDB table for timesheet data
+    Value:
+      Ref: TimesheetTable
+    Export:
+      Name:
+        Fn::Sub: TimesheetOCR-TableName-${Environment}
+  ReportApiUrl:
+    Description: API Gateway endpoint for reports
+    Value:
+      Fn::Sub: https://${ReportApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}
+    Export:
+      Name:
+        Fn::Sub: TimesheetOCR-ApiUrl-${Environment}
+  ReportApiId:
+    Description: API Gateway ID
+    Value:
+      Ref: ReportApi
+    Export:
+      Name:
+        Fn::Sub: TimesheetOCR-ApiId-${Environment}
