@@ -502,7 +502,7 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         key = record['s3']['object']['key']
 
         log(f"Processing: s3://{bucket}/{key}")
-        log(f"Lambda Request ID: {context.request_id if context else 'N/A'}")
+        log(f"Lambda Request ID: {context.aws_request_id if context else 'N/A'}")
         log(f"Memory Limit: {context.memory_limit_in_mb if context else 'N/A'}MB")
 
         # Step 1: Download image and compute hash
@@ -650,8 +650,9 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 input_tokens=claude_usage['input_tokens'],
                 output_tokens=claude_usage['output_tokens'],
                 cost_estimate=total_cost,
-                table_name=DYNAMODB_TABLE,
-                image_hash=image_hash  # Add image hash for deduplication
+                table_name=DYNAMODB_TABLE
+                # NOTE: image_hash not yet supported by store_timesheet_entries()
+                # Will add in future update with database schema changes
             )
 
             db_time = time.time() - db_start
