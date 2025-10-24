@@ -7,8 +7,13 @@ A simple, elegant desktop application for Mac to upload and process timesheet im
 - **📁 File Selection** - Browse and select multiple timesheet images (PNG, JPG, JPEG)
 - **⬆️ Auto Upload** - Automatically uploads to S3 input bucket
 - **🚀 Lambda Trigger** - Triggers OCR processing automatically
-- **📊 Real-time Status** - Shows processing progress and results in real-time
-- **📥 Download Results** - Download all processed CSV files with one click
+- **📊 View Data** - Browse all processed timesheets in DynamoDB
+- **🔄 Refresh Data** - Reload data from database
+- **📥 Export Full Data** - Export complete database with all fields
+- **📤 Import Corrections** - Upload corrected CSV to fix OCR errors
+- **📅 Period Export** - Export data for specific date ranges using calendar pickers
+- **📊 Summary Export** - Export hours summary by resource (with days calculation)
+- **📋 Detailed Export** - Export all timesheet details for a date range
 - **📝 Detailed Logs** - See exactly what's happening with each file
 
 ## 🎯 Quick Start
@@ -31,60 +36,77 @@ python3 timesheet_ui.py
 
 ## 💡 How to Use
 
-### 1. Select Files
-- Click **"📁 Select Files..."**
-- Browse to your timesheet images
+### 1. Upload & Process Timesheets
+- Click **"📁 Select Files..."** to browse for timesheet images
 - Select one or multiple files (hold ⌘ for multiple)
-- Selected files appear in the list
+- Click **"🚀 Upload & Process"** to upload to S3 and trigger OCR
+- Watch real-time processing progress in the logs
 
-### 2. Upload & Process
-- Click **"🚀 Upload & Process"**
-- The app will:
-  - Upload each file to S3
-  - Trigger Lambda processing
-  - Show real-time progress
-  - Display results (resource name, dates, project count, cost)
+### 2. View Processed Data
+- Click **"📊 View Data"** to see all timesheets in DynamoDB
+- Browse by resource, date, project, hours
+- Click **"🔄 Refresh"** to reload latest data
 
-### 3. Download Results
-- Click **"📥 Download Results"**
-- Choose where to save CSV files
-- All processed CSVs are downloaded
-- Folder opens automatically
+### 3. Export & Reporting
+
+#### Full Database Export
+- Click **"📥 Export Full Data"** to download complete database
+- All 14 fields included (ResourceName, Date, Hours, ProjectCode, etc.)
+- Use for backup or offline analysis
+
+#### OCR Error Correction Workflow
+1. Export full data (button above)
+2. Open CSV in Excel/Numbers and fix any OCR errors
+3. Save the corrected CSV
+4. Click **"📤 Import Corrections"** to upload fixes
+5. Only changed rows are updated in database
+
+#### Period-Based Exports
+1. Select **Start Date** and **End Date** using calendar pickers
+2. Choose export type:
+   - **📊 Export Summary** - Hours total by resource with days calculation (Hours ÷ 7.5)
+   - **📋 Export Detailed** - All timesheet entries with all fields
+3. Date range is **inclusive** (includes both start and end dates)
+4. Save location dialog appears
+5. Folder opens automatically with exported file
 
 ## 📋 UI Overview
 
 ```
-┌────────────────────────────────────────────────┐
-│         📊 Timesheet OCR Processor              │
-├────────────────────────────────────────────────┤
-│  1. Select Timesheet Images                    │
-│  ┌──────────────────────────────────────────┐ │
-│  │ 📁 Select Files...  [3 files selected]   │ │
-│  │ ─────────────────────────────────────────│ │
-│  │ • 2025-10-15_20h43_56.png                │ │
-│  │ • timesheet_2.png                         │ │
-│  │ • timesheet_3.png                         │ │
-│  └──────────────────────────────────────────┘ │
-│                                                 │
-│   🚀 Upload & Process    📥 Download Results   │
-│                                                 │
-│  Status & Logs                                 │
-│  ┌──────────────────────────────────────────┐ │
-│  │ [12:34:56] Selected 3 file(s)            │ │
-│  │ [12:35:01] Processing 1/3: timesheet.png │ │
-│  │ [12:35:02]   ⬆️  Uploading to S3...       │ │
-│  │ [12:35:05]   ✓ Uploaded to s3://...      │ │
-│  │ [12:35:06]   🚀 Triggering Lambda...      │ │
-│  │ [12:35:20]   ✓ Success!                  │ │
-│  │ [12:35:20]     Resource: Nik Coultas     │ │
-│  │ [12:35:20]     Projects: 5               │ │
-│  │ [12:35:20]     Time: 13.87s              │ │
-│  │ [12:35:20]     Cost: $0.018603           │ │
-│  └──────────────────────────────────────────┘ │
-│                                                 │
-│  📦 Input: timesheetocr-input-dev-...         │
-│  📂 Output: timesheetocr-output-dev-...       │
-└────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│              📊 Timesheet OCR Processor                      │
+├─────────────────────────────────────────────────────────────┤
+│  1. Select Timesheet Images                                 │
+│  ┌────────────────────────────────────────────────────────┐ │
+│  │ 📁 Select Files...  [3 files selected]    ✕ Clear      │ │
+│  │ ─────────────────────────────────────────────────────  │ │
+│  │ • 2025-10-15_20h43_56.png                              │ │
+│  │ • timesheet_2.png                                       │ │
+│  │ • timesheet_3.png                                       │ │
+│  └────────────────────────────────────────────────────────┘ │
+│                                                              │
+│  2. Process & Manage Data                                   │
+│  🚀 Upload & Process  📊 View Data  🔄 Refresh              │
+│  📥 Export Full Data                                        │
+│  📤 Import Corrections                                      │
+│                                                              │
+│  3. Period Export (with Calendar Pickers)                   │
+│  ┌────────────────────────────────────────────────────────┐ │
+│  │ Start Date: [2025-10-01 ▼]  End Date: [2025-10-31 ▼]  │ │
+│  │ 📊 Export Summary      📋 Export Detailed              │ │
+│  └────────────────────────────────────────────────────────┘ │
+│                                                              │
+│  📋 Logs  |  📊 Data View                                   │
+│  ┌────────────────────────────────────────────────────────┐ │
+│  │ [12:34:56] Selected 3 file(s)                          │ │
+│  │ [12:35:01] Processing 1/3: timesheet.png               │ │
+│  │ [12:35:05] ✓ Uploaded to S3                            │ │
+│  │ [12:35:20] ✓ Processing complete                       │ │
+│  │ [12:35:21] Exporting summary for period...             │ │
+│  │ [12:35:22] ✓ Found 23 records in date range            │ │
+│  │ [12:35:23] ✓ Period summary exported                   │ │
+│  └────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ## ⚙️ Requirements
@@ -93,6 +115,7 @@ python3 timesheet_ui.py
 - **AWS Credentials** (already configured)
 - **boto3** (AWS SDK)
 - **tkinter** (built into Python)
+- **tkcalendar** (for calendar date pickers) - `pip3 install tkcalendar`
 
 ## 🔧 Troubleshooting
 
@@ -156,8 +179,12 @@ UI_README.md             # This file
 1. **Multiple Files** - Hold ⌘ when selecting to pick multiple files
 2. **Clear Selection** - Click "✕ Clear" to start over
 3. **Check Logs** - Scroll through the log area for detailed info
-4. **Cost Tracking** - Each processing shows the cost estimate
-5. **Quick Access** - Drag `launch_ui.command` to your Dock
+4. **Calendar Dates** - Click date fields to open visual calendar picker
+5. **Inclusive Dates** - Both start and end dates are included in exports
+6. **OCR Corrections** - Use Export Full → Edit → Import workflow to fix errors
+7. **Summary vs Detailed** - Summary shows totals by resource, Detailed shows every entry
+8. **Days Calculation** - Total Days = Total Hours ÷ 7.5
+9. **Quick Access** - Drag `launch_ui.command` to your Dock
 
 ## 📊 Cost Information
 

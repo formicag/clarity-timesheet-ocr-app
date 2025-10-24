@@ -2,13 +2,148 @@
 
 ## Overview
 
-The Timesheet OCR system now includes comprehensive reporting capabilities to track which weeks have been submitted for each resource, including handling of zero-hour timesheets (annual leave, absences).
+The Timesheet OCR system includes comprehensive reporting and export capabilities:
+- **Desktop UI Exports** - Export data directly from the Mac application
+- **API-Based Reports** - Access reports via REST API endpoints
+- **Zero-Hour Detection** - Track annual leave and absences
+- **Period-Based Exports** - Export data for specific date ranges
+- **OCR Error Correction** - Fix and re-import corrected data
 
-## New Features
+## Desktop UI Export Features
 
-### 1. Zero-Hour Timesheet Detection
+### 1. Full Database Export & Import
 
-The system now automatically detects when a timesheet has 0% project time logged (indicating annual leave or absence) and tracks these submissions separately.
+**Purpose:** Export complete database for offline review and error correction
+
+**Steps:**
+1. Click **"📥 Export Full Data"** in the UI
+2. Save CSV with all 14 fields (ResourceName, Date, Hours, ProjectCode, etc.)
+3. Open in Excel/Numbers and fix any OCR errors
+4. Save the corrected CSV
+5. Click **"📤 Import Corrections"** to upload
+6. Only changed rows are updated in DynamoDB
+
+**Fields Included:**
+- ResourceName, DateProjectCode, ResourceNameDisplay
+- Date, WeekStartDate, WeekEndDate
+- ProjectCode, ProjectName, Hours
+- IsZeroHourTimesheet, ZeroHourReason
+- SourceImage, ProcessingTimestamp, YearMonth
+
+### 2. Period Summary Export
+
+**Purpose:** Get total hours by resource for a date range
+
+**Steps:**
+1. Select **Start Date** using calendar picker
+2. Select **End Date** using calendar picker
+3. Click **"📊 Export Summary"**
+4. Save CSV file
+
+**Output Format:**
+```csv
+Resource Name,Total Hours,Total Days (Hours ÷ 7.5)
+Barry Breden,150.00,20.00
+Nik Coultas,120.00,16.00
+
+TOTAL,270.00,36.00
+```
+
+**Features:**
+- Aggregates hours by resource
+- Calculates days (Hours ÷ 7.5)
+- Includes grand total row
+- Date range is inclusive (includes both start and end dates)
+- Sorted alphabetically by resource name
+
+### 3. Period Detailed Export
+
+**Purpose:** Export all timesheet entries for a date range
+
+**Steps:**
+1. Select **Start Date** using calendar picker
+2. Select **End Date** using calendar picker
+3. Click **"📋 Export Detailed"**
+4. Save CSV file
+
+**Output:**
+- All 14 fields for each timesheet entry
+- Sorted by Date, then ResourceName
+- One row per timesheet entry
+- Date range is inclusive
+
+**Use Cases:**
+- Detailed audit trail
+- Analysis by project or date
+- Verification of specific entries
+- Bulk review of timesheets
+
+### 4. Clarity Month Export (VMO2)
+
+**Purpose:** Export timesheet data for Virgin Media O2's custom billing periods (Clarity Months)
+
+**What are Clarity Months?**
+VMO2 uses non-calendar months for billing and reporting. Each Clarity Month has specific start and end dates that don't align with standard calendar months.
+
+**Example:**
+- **Jan-25**: December 16, 2024 to January 19, 2025
+- **Nov-25**: October 20, 2025 to November 16, 2025
+
+**Steps:**
+1. Select a **Clarity Month** from the dropdown (e.g., "Nov-25 (20-Oct-25 to 16-Nov-25)")
+2. Choose export type:
+   - Click **"📊 Export Summary"** for hours by resource
+   - Click **"📋 Export Detailed"** for all timesheet entries
+3. Save the CSV file
+
+**Default Selection:**
+The dropdown automatically selects the current Clarity Month based on today's date.
+
+**Available Months:**
+- Jan-25 through Dec-25 (12 months)
+- All 2025 Clarity billing periods
+- Pre-configured with VMO2-specific date ranges
+
+**Export Formats:**
+- **Summary:** Same format as Period Summary (Resource, Hours, Days)
+- **Detailed:** Same format as Period Detailed (all 14 fields)
+- Filenames include date ranges (e.g., `timesheet_summary_2025-10-20_to_2025-11-16_20251022.csv`)
+
+**Configuration:**
+Clarity months are defined in `clarity_months.json` and can be updated for future years.
+
+### Calendar Date Pickers
+
+**Features:**
+- Visual calendar interface
+- Click to select dates
+- Navigate between months
+- Week starts on Monday
+- Format: YYYY-MM-DD
+- Defaults: Start = 1st of current month, End = today
+
+**Important:** Date ranges are **inclusive** - both start and end dates are included in the export.
+
+## API-Based Features
+
+### 1. Per-Person Calendar Reports
+
+Generate visual calendar reports showing:
+- **Green checkmark**: Week has timesheet data
+- **Orange warning**: Week has zero-hour timesheet (leave/absence)
+- **Red cross**: Week is missing timesheet submission
+
+### 2. Gap Detection
+
+The system identifies missing weeks by:
+1. Finding the earliest timesheet submission date
+2. Generating all calendar weeks from that date to present
+3. Marking weeks without submissions as "missing"
+4. Calculating completion percentage
+
+### 3. Zero-Hour Timesheet Detection
+
+The system automatically detects when a timesheet has 0% project time logged (indicating annual leave or absence) and tracks these submissions separately.
 
 **Key Characteristics:**
 - Detects timesheets with 0% project time
@@ -20,21 +155,6 @@ The system now automatically detects when a timesheet has 0% project time logged
 - Employee on annual leave for the week
 - Employee absent for the week
 - Any timesheet showing 0% in the top-right corner
-
-### 2. Per-Person Calendar Reports
-
-Generate visual calendar reports showing:
-- **Green checkmark**: Week has timesheet data
-- **Orange warning**: Week has zero-hour timesheet (leave/absence)
-- **Red cross**: Week is missing timesheet submission
-
-### 3. Gap Detection
-
-The system identifies missing weeks by:
-1. Finding the earliest timesheet submission date
-2. Generating all calendar weeks from that date to present
-3. Marking weeks without submissions as "missing"
-4. Calculating completion percentage
 
 ## API Endpoints
 

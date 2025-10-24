@@ -22,28 +22,35 @@ open "Timesheet OCR.app"
 
 ## Using the UI
 
-### Step 1: Select Files
+### Step 1: Upload & Process Timesheets
 1. Click **"📁 Select Files..."**
 2. Browse to your timesheet images
 3. Select one or more files (⌘-click for multiple)
-4. Click **Open**
+4. Click **"🚀 Upload & Process"**
+5. Watch the progress in the log area
 
-### Step 2: Process
-1. Click **"🚀 Upload & Process"**
-2. Watch the progress in the log area
-3. Each file shows:
-   - Upload status
-   - Processing status
-   - Resource name extracted
-   - Number of projects found
-   - Processing time
-   - Cost estimate
+### Step 2: View & Manage Data
+1. Click **"📊 View Data"** to see all processed timesheets
+2. Click **"🔄 Refresh"** to reload latest data from DynamoDB
+3. Browse by resource, date, project, and hours
 
-### Step 3: Download Results
-1. Click **"📥 Download Results"**
-2. Choose where to save CSVs
-3. All processed files download
-4. Folder opens automatically
+### Step 3: Export Data
+
+#### Full Database Export (for corrections)
+1. Click **"📥 Export Full Data"**
+2. Choose save location
+3. Edit CSV in Excel/Numbers to fix OCR errors
+4. Click **"📤 Import Corrections"** to upload fixes
+5. Only changed rows are updated
+
+#### Period-Based Exports
+1. Select **Start Date** from calendar picker
+2. Select **End Date** from calendar picker
+3. Choose export type:
+   - **📊 Export Summary** - Total hours by resource with days
+   - **📋 Export Detailed** - All timesheet entries with all fields
+4. Save CSV file
+5. Folder opens automatically
 
 ## Example Session
 

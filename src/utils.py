@@ -28,9 +28,60 @@ def parse_date_range(date_range_str: str) -> Tuple[datetime, datetime]:
         start_str = parts[0].strip()
         end_str = parts[1].strip()
 
-        # Parse dates - handle both "Sep 29 2025" and "29 Sep 2025" formats
-        start_date = datetime.strptime(start_str, "%b %d %Y")
-        end_date = datetime.strptime(end_str, "%b %d %Y")
+        # Try multiple date formats
+        date_formats = [
+            "%b %d, %Y",      # Aug 25, 2025
+            "%b %d %Y",       # Aug 25 2025
+            "%d %b, %Y",      # 25 Aug, 2025
+            "%d %b %Y",       # 25 Aug 2025
+            "%m.%d.%Y",       # 03.13.2023
+            "%m/%d/%Y",       # 03/13/2023
+        ]
+
+        # Formats without year (we'll use end date's year)
+        short_formats = [
+            "%b %d",          # Aug 25
+            "%d %b",          # 25 Aug
+        ]
+
+        start_date = None
+        end_date = None
+
+        # First try full formats on both dates
+        for fmt in date_formats:
+            try:
+                start_date = datetime.strptime(start_str, fmt)
+                end_date = datetime.strptime(end_str, fmt)
+                break
+            except ValueError:
+                continue
+
+        # If that failed, try short format on start date with year from end date
+        if start_date is None or end_date is None:
+            # First parse end date to get the year
+            for fmt in date_formats:
+                try:
+                    end_date = datetime.strptime(end_str, fmt)
+                    break
+                except ValueError:
+                    continue
+
+            if end_date:
+                # Now try short formats on start date
+                for fmt in short_formats:
+                    try:
+                        start_date = datetime.strptime(start_str, fmt)
+                        # Add year from end date
+                        start_date = start_date.replace(year=end_date.year)
+                        # Handle year boundary (e.g., "Dec 30 - Jan 5 2025")
+                        if start_date > end_date:
+                            start_date = start_date.replace(year=end_date.year - 1)
+                        break
+                    except ValueError:
+                        continue
+
+        if start_date is None or end_date is None:
+            raise ValueError(f"Could not parse dates with any known format")
 
         return start_date, end_date
     except Exception as e:
@@ -62,11 +113,85 @@ def generate_week_dates(start_date: datetime, end_date: datetime) -> List[dateti
     if len(dates) != 7:
         raise ValueError(f"Date range must be exactly 7 days (Mon-Sun), got {len(dates)} days")
 
-    # Validate starts on Monday (weekday 0)
+    # Validate starts on Monday (weekday 0) - but be flexible and auto-adjust if needed
     if dates[0].weekday() != 0:
-        raise ValueError(f"Week must start on Monday, but starts on {dates[0].strftime('%A')}")
+        # Calculate how many days back to Monday
+        days_since_monday = dates[0].weekday()
+        # If week doesn't start on Monday, adjust to previous Monday
+        monday = dates[0] - timedelta(days=days_since_monday)
+
+        # Regenerate dates from Monday
+        dates = []
+        for i in range(7):
+            dates.append(monday + timedelta(days=i))
 
     return dates
+
+
+def is_valid_project_code(project_code: str) -> bool:
+    """
+    Check if a project code is valid.
+
+    Valid project codes are:
+    - PJ followed by 6 digits (e.g., PJ025043)
+    - REAG followed by 6 digits (e.g., REAG042910)
+    - HCST followed by digits (e.g., HCST314980)
+    - NTC5 followed by digits (e.g., NTC5124690)
+    - Other letter prefixes followed by digits (flexible for future codes)
+
+    Invalid patterns (subtask labels):
+    - Pure words like DESIGN, LABOUR, TESTING
+    - Anything without digits
+
+    Args:
+        project_code: Project code to validate
+
+    Returns:
+        True if valid, False otherwise
+    """
+    if not project_code or len(project_code) < 3:
+        return False
+
+    code = project_code.upper().strip()
+
+    # Must contain at least one digit (project codes have numbers)
+    if not any(c.isdigit() or c in 'OIL' for c in code):  # OIL are OCR errors for 0,1,1
+        return False
+
+    # Reject pure words (subtask labels)
+    if code.isalpha():
+        return False
+
+    # Check common valid patterns
+    # Pattern 1: PJ + 6 digits
+    if code.startswith('PJ') and len(code) >= 8:
+        return True
+
+    # Pattern 2: REAG + 6 digits
+    if code.startswith('REAG') and len(code) >= 10:
+        return True
+
+    # Pattern 3: HCST + digits
+    if code.startswith('HCST') and len(code) >= 8:
+        return True
+
+    # Pattern 4: NTC5 + digits
+    if code.startswith('NTC5') and len(code) >= 8:
+        return True
+
+    # Pattern 5: Other letter prefix + digits (e.g., SCR1476, PR12345)
+    # Must start with letters, then have digits
+    has_letter_prefix = False
+    has_digits = False
+    for i, c in enumerate(code):
+        if i == 0 and not c.isalpha():
+            return False  # Must start with letter
+        if c.isalpha():
+            has_letter_prefix = True
+        elif c.isdigit() or c in 'OIL':
+            has_digits = True
+
+    return has_letter_prefix and has_digits
 
 
 def normalize_project_code(project_code: str) -> str:
@@ -77,6 +202,7 @@ def normalize_project_code(project_code: str) -> str:
     - Letter O mistaken for digit 0
     - Letter I mistaken for digit 1
     - Letter l mistaken for digit 1
+    - Letter S mistaken for digit 5 (in NTCS vs NTC5)
 
     Args:
         project_code: Raw project code from OCR
@@ -89,6 +215,10 @@ def normalize_project_code(project_code: str) -> str:
 
     # Project codes typically start with 'PJ' followed by digits
     normalized = project_code.upper()
+
+    # Special case: NTCS should be NTC5 (S is misread 5)
+    if normalized.startswith('NTCS'):
+        normalized = 'NTC5' + normalized[4:]
 
     # If it starts with 'PJ', ensure the rest are digits
     if normalized.startswith('PJ'):
@@ -156,6 +286,104 @@ def format_date_for_csv(date_obj: datetime) -> str:
         Date formatted as YYYY-MM-DD
     """
     return date_obj.strftime("%Y-%m-%d")
+
+
+def validate_timesheet_totals(data: dict) -> dict:
+    """
+    Validate that daily and weekly totals match the sum of project hours.
+
+    Args:
+        data: Dictionary containing parsed timesheet data with 'daily_totals' and 'weekly_total'
+
+    Returns:
+        Dictionary with validation results:
+        {
+            'valid': bool,
+            'daily_validation': [{'day': str, 'expected': float, 'actual': float, 'match': bool}, ...],
+            'weekly_validation': {'expected': float, 'actual': float, 'match': bool},
+            'errors': [str, ...]
+        }
+    """
+    result = {
+        'valid': True,
+        'daily_validation': [],
+        'weekly_validation': {},
+        'errors': []
+    }
+
+    # Skip validation for zero-hour timesheets
+    if data.get('is_zero_hour_timesheet'):
+        # For zero-hour timesheets, everything should be 0
+        day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        for i in range(7):
+            result['daily_validation'].append({
+                'day': day_names[i],
+                'expected': 0.0,
+                'actual': 0.0,
+                'match': True
+            })
+        result['weekly_validation'] = {
+            'expected': 0.0,
+            'actual': 0.0,
+            'match': True
+        }
+        return result
+
+    # Get expected totals from the header row
+    daily_totals_header = data.get('daily_totals', [])  # [Mon, Tue, Wed, Thu, Fri, Sat, Sun]
+    weekly_total_header = data.get('weekly_total', 0)
+
+    # Calculate actual totals from projects
+    day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+    calculated_daily = [0.0] * 7
+    calculated_weekly = 0.0
+
+    for project in data.get('projects', []):
+        hours_by_day = project.get('hours_by_day', [])
+        for i, day_data in enumerate(hours_by_day):
+            if i >= 7:
+                break
+            hours = parse_hours(day_data.get('hours', '0'))
+            calculated_daily[i] += hours
+            calculated_weekly += hours
+
+    # Validate each day
+    tolerance = 0.01  # Allow 0.01 hour difference for floating point
+    for i in range(7):
+        expected = parse_hours(str(daily_totals_header[i])) if i < len(daily_totals_header) else 0.0
+        actual = calculated_daily[i]
+        match = abs(expected - actual) < tolerance
+
+        result['daily_validation'].append({
+            'day': day_names[i],
+            'expected': expected,
+            'actual': actual,
+            'match': match
+        })
+
+        if not match:
+            result['valid'] = False
+            result['errors'].append(
+                f"{day_names[i]}: Expected {expected:.2f}h but projects sum to {actual:.2f}h"
+            )
+
+    # Validate weekly total
+    expected_weekly = parse_hours(str(weekly_total_header))
+    match_weekly = abs(expected_weekly - calculated_weekly) < tolerance
+
+    result['weekly_validation'] = {
+        'expected': expected_weekly,
+        'actual': calculated_weekly,
+        'match': match_weekly
+    }
+
+    if not match_weekly:
+        result['valid'] = False
+        result['errors'].append(
+            f"Weekly Total: Expected {expected_weekly:.2f}h but projects sum to {calculated_weekly:.2f}h"
+        )
+
+    return result
 
 
 def validate_timesheet_data(data: dict) -> List[str]:

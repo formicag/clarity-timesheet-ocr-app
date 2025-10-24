@@ -55,6 +55,13 @@ local_test.py
 test_*.png
 !2025-10-15_20h43_56.png
 
+# Team roster (user-specific)
+team_roster.json
+
+# Project master list (user-specific)
+project_master.json
+project_master_suggested.json
+
 # Terraform
 terraform/.terraform/
 terraform/.terraform.lock.hcl
