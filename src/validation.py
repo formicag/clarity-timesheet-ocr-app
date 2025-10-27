@@ -35,6 +35,7 @@ def validate_timesheet_data(timesheet_data: Dict[str, Any]) -> Dict[str, Any]:
     projects = timesheet_data.get('projects', [])
     daily_totals = timesheet_data.get('daily_totals', [0] * 7)
     weekly_total = timesheet_data.get('weekly_total', 0)
+    day_alignment_errors = timesheet_data.get('day_alignment_errors', [])
 
     # Skip validation for zero-hour timesheets
     if is_zero_hour:
@@ -44,6 +45,12 @@ def validate_timesheet_data(timesheet_data: Dict[str, Any]) -> Dict[str, Any]:
             'warnings': [],
             'summary': f'✓ Zero-hour timesheet validation passed for {resource_name}'
         }
+
+    # CRITICAL Validation 0: Check for wrong-day assignments
+    # This is the MOST IMPORTANT validation - if days are misaligned, the entire timesheet is unusable
+    if day_alignment_errors:
+        for alignment_error in day_alignment_errors:
+            errors.append(f"🚨 {alignment_error}")
 
     # Validation 1: Calculate project hours by day
     calculated_daily_totals = [0.0] * 7

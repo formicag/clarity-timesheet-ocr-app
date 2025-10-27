@@ -58,8 +58,8 @@ def parse_timesheet_json(json_str: str) -> dict:
 
         data = json.loads(json_str)
 
-        # Enforce bank holiday rules
-        data = enforce_bank_holiday_rules(data)
+        # DISABLED: Bank holiday enforcement - people can work on bank holidays
+        # data = enforce_bank_holiday_rules(data)
 
         # Enforce project code quality rules
         data = enforce_project_code_quality(data)

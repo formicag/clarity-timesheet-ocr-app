@@ -165,6 +165,9 @@ def generate_coverage_report(clarity_month: str,
     """
     Generate timesheet coverage report for a Clarity month.
 
+    OPTIMIZED VERSION: Reads from pre-computed coverage tracker data
+    instead of querying each person/week individually.
+
     Args:
         clarity_month: Clarity month like "Sep-25"
         dynamodb_table: DynamoDB table name
@@ -182,14 +185,23 @@ def generate_coverage_report(clarity_month: str,
     # Load team roster
     team_members = load_team_roster()
 
-    # Build coverage matrix
+    # OPTIMIZED: Query coverage tracker data for all team members at once
+    from src.coverage_tracker import get_coverage_for_person
+
+    # Build coverage matrix from pre-computed data
     coverage = {}
     for person in team_members:
+        resource_name = person.replace(' ', '_')
+
+        # Get coverage data for this person/month (single query!)
+        coverage_data = get_coverage_for_person(dynamodb_table, resource_name, clarity_month)
+        weeks_submitted = coverage_data.get('weeks_submitted', set())
+
+        # Build week-by-week coverage
         coverage[person] = {}
         for week in weeks:
             week_str = week.strftime('%Y-%m-%d')
-            has_timesheet = check_timesheet_exists(person, week, dynamodb_table, region)
-            coverage[person][week_str] = has_timesheet
+            coverage[person][week_str] = week_str in weeks_submitted
 
     # Calculate statistics
     total_expected = len(team_members) * len(weeks)

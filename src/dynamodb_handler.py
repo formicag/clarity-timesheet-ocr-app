@@ -16,6 +16,8 @@ from utils import (
     validate_timesheet_data
 )
 from bank_holidays import is_bank_holiday
+from coverage_tracker import update_coverage, get_week_commencing
+from ocr_version import OCR_VERSION
 
 # Configure boto3 with retries for transient errors
 boto_config = Config(
@@ -85,7 +87,8 @@ def store_timesheet_entries(
     input_tokens: int = 0,
     output_tokens: int = 0,
     cost_estimate: float = 0.0,
-    table_name: str = None
+    table_name: str = None,
+    image_metadata: dict = None
 ) -> Dict:
     """
     Store timesheet entries in DynamoDB.
@@ -110,6 +113,7 @@ def store_timesheet_entries(
         output_tokens: Number of output tokens
         cost_estimate: Estimated cost in USD
         table_name: DynamoDB table name (from environment)
+        image_metadata: Optional image metadata (resolution, format, size, etc.)
 
     Returns:
         Dictionary with summary of stored entries
@@ -165,6 +169,12 @@ def store_timesheet_entries(
             'OutputTokens': output_tokens,
             'CostEstimateUSD': convert_float_to_decimal(cost_estimate),
 
+            # OCR Version Tracking
+            'OCRVersion': OCR_VERSION['version'],
+            'OCRBuildDate': OCR_VERSION['build_date'],
+            'OCRDescription': OCR_VERSION['description'],
+            'OCRFullVersion': OCR_VERSION['full_version'],
+
             # Week context
             'WeekStartDate': start_date.strftime('%Y-%m-%d'),
             'WeekEndDate': end_date.strftime('%Y-%m-%d'),
@@ -172,6 +182,10 @@ def store_timesheet_entries(
             # GSI attributes
             'YearMonth': start_date.strftime('%Y-%m'),
         }
+
+        # Add image metadata if available
+        if image_metadata:
+            item.update(image_metadata)
 
         table.put_item(Item=item)
         entries_stored = 1
@@ -299,6 +313,12 @@ def store_timesheet_entries(
                 'OutputTokens': output_tokens,
                 'CostEstimateUSD': convert_float_to_decimal(cost_estimate),
 
+                # OCR Version Tracking
+                'OCRVersion': OCR_VERSION['version'],
+                'OCRBuildDate': OCR_VERSION['build_date'],
+                'OCRDescription': OCR_VERSION['description'],
+                'OCRFullVersion': OCR_VERSION['full_version'],
+
                 # Week context
                 'WeekStartDate': start_date.strftime('%Y-%m-%d'),
                 'WeekEndDate': end_date.strftime('%Y-%m-%d'),
@@ -307,6 +327,10 @@ def store_timesheet_entries(
                 'YearMonth': date_str[:7],  # e.g., "2025-09" for GSI queries
                 'ProjectCodeGSI': project_code,  # For project-based queries
             }
+
+            # Add image metadata if available
+            if image_metadata:
+                item.update(image_metadata)
 
             unique_entries[entry_key] = item
 
@@ -325,6 +349,21 @@ def store_timesheet_entries(
                     batch.put_item(Item=item)
                     entries_stored += 1
             print(f"[DEBUG] Batch write completed successfully - {entries_stored} entries written")
+
+            # Update coverage tracker - mark this week as submitted for this person/month
+            try:
+                # Get first date from the timesheet to determine the week
+                if week_dates and len(week_dates) > 0:
+                    first_date = format_date_for_csv(week_dates[0])
+                    week_monday = get_week_commencing(first_date)
+                    coverage_result = update_coverage(table_name, resource_key, first_date)
+                    if coverage_result.get('success'):
+                        print(f"📅 Coverage tracker updated: {resource_name} - {coverage_result.get('clarity_month')} - Week {week_monday}")
+                    else:
+                        print(f"⚠️  Coverage tracker update failed: {coverage_result.get('error', 'Unknown')}")
+            except Exception as e:
+                print(f"⚠️  Coverage tracker error (non-fatal): {e}")
+
         except Exception as e:
             print(f"[DEBUG] Batch write FAILED with error: {type(e).__name__}: {str(e)}")
             print(f"[DEBUG] Table name was: {table_name}")

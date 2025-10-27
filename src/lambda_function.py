@@ -17,7 +17,7 @@ import re
 import base64
 import random
 import hashlib
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
 from decimal import Decimal
 from datetime import datetime
 
@@ -28,6 +28,9 @@ from validation import validate_timesheet_data, format_validation_report
 from team_manager import TeamManager
 from parsing import calculate_cost_estimate
 from performance import PerformanceTimer, PerformanceMetrics, create_logger
+from failed_image_logger import log_failed_image, get_attempt_count
+from ocr_version import OCR_VERSION
+from field_validators import FieldValidator, validate_timesheet_data_fields
 
 # Environment variables
 DYNAMODB_TABLE = os.environ.get('DYNAMODB_TABLE', '')
@@ -43,6 +46,48 @@ perf_metrics = PerformanceMetrics()
 
 # Create logger
 log = create_logger("LAMBDA")
+
+# Global cache for reference dictionaries (loaded once per Lambda container)
+_reference_dictionaries_cache = None
+
+
+def load_reference_dictionaries(bucket: str) -> Dict:
+    """
+    Load reference dictionaries from S3 with caching.
+    Returns dictionaries for project codes, person names, etc.
+    """
+    global _reference_dictionaries_cache
+
+    # Return cached version if available
+    if _reference_dictionaries_cache is not None:
+        return _reference_dictionaries_cache
+
+    try:
+        log("Loading reference dictionaries from S3...")
+        response = s3_client.get_object(
+            Bucket=bucket,
+            Key='dictionaries/reference_data.json'
+        )
+        data = json.loads(response['Body'].read().decode('utf-8'))
+
+        # Convert lists to sets for fast lookup
+        _reference_dictionaries_cache = {
+            'project_codes': set(data.get('project_codes', [])),
+            'person_names': set(data.get('person_names', [])),
+            'code_to_name': data.get('code_to_name', {}),
+            'statistics': data.get('statistics', {})
+        }
+
+        stats = _reference_dictionaries_cache['statistics']
+        log(f"Loaded {stats.get('project_code_count', 0)} project codes, "
+            f"{stats.get('person_name_count', 0)} person names")
+
+        return _reference_dictionaries_cache
+
+    except Exception as e:
+        log(f"Failed to load reference dictionaries: {e}", "WARN")
+        log("Field validators will work without dictionaries (basic corrections only)")
+        return {'project_codes': set(), 'person_names': set(), 'code_to_name': {}}
 
 
 def compute_image_hash(image_bytes: bytes) -> str:
@@ -133,29 +178,30 @@ Return ONLY this JSON (no explanations):
 
 IMPORTANT: The resource_name must be a person's actual name (first name and last name), not a job title or role."""
 
+    # Amazon Nova Lite request format
     request_body = {
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 1024,
-        "temperature": 0,
         "messages": [
             {
                 "role": "user",
                 "content": [
                     {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": encoded_image
+                        "image": {
+                            "format": "png" if media_type == "image/png" else "jpeg",
+                            "source": {
+                                "bytes": encoded_image
+                            }
                         }
                     },
                     {
-                        "type": "text",
                         "text": prompt
                     }
                 ]
             }
-        ]
+        ],
+        "inferenceConfig": {
+            "max_new_tokens": 1024,
+            "temperature": 0
+        }
     }
 
     # Retry logic with exponential backoff for throttling
@@ -164,25 +210,25 @@ IMPORTANT: The resource_name must be a person's actual name (first name and last
 
     for attempt in range(max_retries):
         try:
-            log(f"Claude API call (attempt {attempt + 1}/{max_retries})")
+            log(f"Amazon Nova Lite API call (attempt {attempt + 1}/{max_retries})")
 
-            with PerformanceTimer(f"Claude API Call #{attempt + 1}", log):
+            with PerformanceTimer(f"Nova Lite API Call #{attempt + 1}", log):
                 api_start = time.time()
 
                 response = bedrock_runtime.invoke_model(
-                    modelId='us.anthropic.claude-3-5-sonnet-20241022-v2:0',
+                    modelId='us.amazon.nova-lite-v1:0',
                     body=json.dumps(request_body),
                     contentType='application/json',
                     accept='application/json'
                 )
 
                 api_time = time.time() - api_start
-                log(f"Claude API responded in {api_time:.3f}s")
+                log(f"Nova Lite API responded in {api_time:.3f}s")
 
             response_body = json.loads(response['body'].read())
-            text = response_body['content'][0]['text']
+            text = response_body['output']['message']['content'][0]['text']
 
-            log(f"Claude response: {text[:200]}..." if len(text) > 200 else f"Claude response: {text}")
+            log(f"Nova Lite response: {text[:200]}..." if len(text) > 200 else f"Nova Lite response: {text}")
 
             # Parse JSON
             if '```json' in text:
@@ -193,10 +239,10 @@ IMPORTANT: The resource_name must be a person's actual name (first name and last
             metadata = json.loads(text)
 
             total_time = time.time() - operation_start
-            perf_metrics.record("claude_metadata_extraction", total_time, {
+            perf_metrics.record("nova_metadata_extraction", total_time, {
                 "attempt": attempt + 1,
-                "input_tokens": response_body['usage']['input_tokens'],
-                "output_tokens": response_body['usage']['output_tokens']
+                "input_tokens": response_body['usage']['inputTokens'],
+                "output_tokens": response_body['usage']['outputTokens']
             })
 
             log(f"✅ Metadata extracted: {metadata}")
@@ -204,7 +250,7 @@ IMPORTANT: The resource_name must be a person's actual name (first name and last
 
         except Exception as e:
             error_str = str(e)
-            log(f"❌ Claude API error (attempt {attempt + 1}): {error_str}", "ERROR")
+            log(f"❌ Nova Lite API error (attempt {attempt + 1}): {error_str}", "ERROR")
 
             if 'ThrottlingException' in error_str or 'Too many requests' in error_str:
                 if attempt < max_retries - 1:
@@ -255,6 +301,26 @@ def extract_table_with_textract(bucket: str, key: str) -> Tuple[Dict, float]:
         })
 
         return textract_response, extraction_time
+
+
+def extract_day_number_from_header(header_text: str) -> Optional[int]:
+    """
+    Extract calendar day number from header cell text.
+
+    Examples:
+        "Mon. 18" -> 18
+        "Tue. 19" -> 19
+        "Mon. 6 7.50" -> 6
+
+    Returns:
+        Day number (1-31) or None if not found
+    """
+    import re
+    # Look for day name followed by a number
+    match = re.search(r'(Mon|Tue|Wed|Thu|Fri|Sat|Sun)[.\s]+(\d{1,2})', header_text)
+    if match:
+        return int(match.group(2))
+    return None
 
 
 def parse_timesheet_table(textract_response: Dict, resource_name: str, date_range: str) -> Tuple[Dict, float]:
@@ -405,6 +471,44 @@ def parse_timesheet_table(textract_response: Dict, resource_name: str, date_rang
         log(f"Daily totals: {daily_totals}")
         log(f"Weekly total: {weekly_total}")
 
+        # CRITICAL: Validate day-to-date alignment
+        # Extract calendar day numbers from header and verify they match expected dates
+        log("🔍 Validating day-to-date alignment (CRITICAL for date accuracy)")
+        try:
+            from utils import generate_week_dates
+            start_date, end_date = parse_date_range(date_range)
+            expected_week_dates = generate_week_dates(start_date, end_date)
+
+            day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+            alignment_errors = []
+
+            for col_idx, day_idx in day_columns.items():
+                header_text = header.get(col_idx, '')
+                extracted_day_num = extract_day_number_from_header(header_text)
+                expected_date = expected_week_dates[day_idx]
+                expected_day_num = expected_date.day
+
+                if extracted_day_num is None:
+                    log(f"  ⚠️  WARNING: Could not extract day number from header '{header_text}'", "WARN")
+                elif extracted_day_num != expected_day_num:
+                    error_msg = f"WRONG DAY ASSIGNMENT: Column for {day_names[day_idx]} shows day {extracted_day_num} but expected {expected_day_num} ({expected_date.strftime('%b %d')})"
+                    log(f"  ❌ {error_msg}", "ERROR")
+                    alignment_errors.append(error_msg)
+                else:
+                    log(f"  ✅ {day_names[day_idx]} (col {col_idx}): day {extracted_day_num} matches expected {expected_day_num}")
+
+            if alignment_errors:
+                # Store errors in result data for validation reporting
+                log(f"🚨 CRITICAL: {len(alignment_errors)} day alignment error(s) detected!", "ERROR")
+                log("   This means hours are assigned to WRONG CALENDAR DATES in the database!", "ERROR")
+                log("   The timesheet will be marked as INVALID.", "ERROR")
+            else:
+                log("✅ Day-to-date alignment validated successfully")
+
+        except Exception as e:
+            log(f"⚠️  WARNING: Could not validate day alignment: {e}", "WARN")
+            alignment_errors = []
+
         # Extract projects and hours
         log("Extracting projects and hours")
         projects = {}
@@ -462,7 +566,8 @@ def parse_timesheet_table(textract_response: Dict, resource_name: str, date_rang
             'zero_hour_reason': None,
             'projects': list(projects.values()),
             'daily_totals': daily_totals,
-            'weekly_total': weekly_total
+            'weekly_total': weekly_total,
+            'day_alignment_errors': alignment_errors  # CRITICAL: Track wrong-day assignments
         }
 
         log(f"✅ Extracted {len(projects)} projects with {sum(1 for p in projects.values() for d in p['hours_by_day'] if float(d['hours']) > 0)} non-zero day entries")
@@ -516,12 +621,22 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             image_hash = compute_image_hash(image_bytes)
             log(f"Image hash: {image_hash[:16]}...")
 
+        # Extract image metadata (optional - requires Pillow in Lambda layer)
+        image_metadata = None
+        try:
+            with PerformanceTimer("Image Metadata Extraction", log):
+                from image_metadata import extract_image_metadata, get_image_stats_summary
+                image_metadata = extract_image_metadata(image_bytes, len(image_bytes))
+                log(f"Image stats: {get_image_stats_summary(image_metadata)}")
+        except ImportError:
+            log("Image metadata extraction skipped (Pillow not available)")
+
         # Step 2: Extract metadata (name, dates, status) with Claude
         log("\n" + "="*80)
         log("STEP 2: Extract Metadata with Claude")
         log("="*80)
 
-        metadata, claude_usage, metadata_time = extract_metadata_with_claude(bucket, key, image_bytes)
+        metadata, nova_usage, metadata_time = extract_metadata_with_claude(bucket, key, image_bytes)
         resource_name = metadata['resource_name']
         date_range = metadata['date_range']
         status = metadata.get('status', 'Unknown').strip()
@@ -579,6 +694,28 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
         timesheet_data, parsing_time = parse_timesheet_table(textract_response, resource_name, date_range)
 
+        # Step 4.5: Apply field validators for auto-correction
+        log("\n" + "="*80)
+        log("STEP 4.5: Field Validation and Auto-Correction")
+        log("="*80)
+
+        try:
+            with PerformanceTimer("Field Validation", log):
+                # Load reference dictionaries (cached after first load)
+                ref_dicts = load_reference_dictionaries(bucket)
+
+                # Create field validator with dictionary
+                validator = FieldValidator(project_code_dictionary=ref_dicts['project_codes'])
+
+                # Apply validators to all fields
+                timesheet_data = validate_timesheet_data_fields(timesheet_data, validator, log_func=log)
+
+                perf_metrics.record("field_validation", 0.001, {})
+        except Exception as e:
+            log(f"Field validation failed (continuing without corrections): {e}", "WARN")
+            import traceback
+            log(f"Stack trace:\n{traceback.format_exc()}", "DEBUG")
+
         # Step 5: Normalize resource name using team roster
         log("\n" + "="*80)
         log("STEP 5: Normalize Resource Name")
@@ -621,15 +758,15 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
         textract_pages = 1
         textract_cost = textract_pages * 0.0015  # $0.0015 per page for table analysis
-        claude_cost = calculate_cost_estimate(
-            claude_usage['input_tokens'],
-            claude_usage['output_tokens'],
-            'us.anthropic.claude-3-5-sonnet-20241022-v2:0'
+        nova_cost = calculate_cost_estimate(
+            nova_usage['inputTokens'],
+            nova_usage['outputTokens'],
+            'us.amazon.nova-lite-v1:0'
         )['total_cost_usd']
-        total_cost = textract_cost + claude_cost
+        total_cost = textract_cost + nova_cost
 
         log(f"💰 Textract cost: ${textract_cost:.6f}")
-        log(f"💰 Claude cost: ${claude_cost:.6f}")
+        log(f"💰 Nova Lite cost: ${nova_cost:.6f}")
         log(f"💰 Total cost: ${total_cost:.6f}")
 
         # Step 8: Store in DynamoDB
@@ -646,13 +783,12 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 timesheet_data=timesheet_data,
                 image_key=key,
                 processing_time=processing_time,
-                model_id='textract+claude',
-                input_tokens=claude_usage['input_tokens'],
-                output_tokens=claude_usage['output_tokens'],
+                model_id='textract+nova-lite',
+                input_tokens=nova_usage['inputTokens'],
+                output_tokens=nova_usage['outputTokens'],
                 cost_estimate=total_cost,
-                table_name=DYNAMODB_TABLE
-                # NOTE: image_hash not yet supported by store_timesheet_entries()
-                # Will add in future update with database schema changes
+                table_name=DYNAMODB_TABLE,
+                image_metadata=image_metadata  # Pass image metadata for analysis
             )
 
             db_time = time.time() - db_start
@@ -705,6 +841,57 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         import traceback
         stack_trace = traceback.format_exc()
         log(f"Full stack trace:\n{stack_trace}", "ERROR")
+
+        # === LOG FAILURE TO DATABASE ===
+        try:
+            # Determine failure type
+            failure_type = "OCR_ERROR"
+            if "parsing" in str(e).lower() or "json" in str(e).lower():
+                failure_type = "PARSING_ERROR"
+            elif "validation" in str(e).lower():
+                failure_type = "VALIDATION_ERROR"
+            elif "throttl" in str(e).lower():
+                failure_type = "THROTTLING_ERROR"
+            elif "textract" in str(e).lower():
+                failure_type = "TEXTRACT_ERROR"
+
+            # Get attempt count
+            attempt_number = get_attempt_count(DYNAMODB_TABLE, key) + 1
+
+            # Collect error details
+            error_details = {
+                'error_code': type(e).__name__,
+                'processing_time': error_time,
+                'stack_trace': stack_trace,
+                's3_bucket': bucket,
+                's3_region': 'us-east-1',
+                'attempt_number': attempt_number,
+                'cloudwatch_log_stream': context.log_stream_name if context else 'unknown'
+            }
+
+            # Add any available OCR data for debugging
+            if 'metadata' in locals():
+                error_details['raw_ocr_output'] = str(metadata)[:10000]
+
+            if 'nova_usage' in locals():
+                error_details['input_tokens'] = nova_usage.get('inputTokens', 0)
+                error_details['output_tokens'] = nova_usage.get('outputTokens', 0)
+
+            # Log the failure
+            log_failed_image(
+                table_name=DYNAMODB_TABLE,
+                image_key=key,
+                failure_type=failure_type,
+                error_message=str(e),
+                ocr_version=OCR_VERSION,
+                error_details=error_details,
+                image_metadata=image_metadata if 'image_metadata' in locals() else None
+            )
+            log(f"📝 Logged failure to database", "INFO")
+
+        except Exception as log_error:
+            log(f"⚠️  Could not log failure: {log_error}", "WARN")
+        # === END FAILURE LOGGING ===
 
         # Print partial performance report even on failure
         perf_metrics.print_report()

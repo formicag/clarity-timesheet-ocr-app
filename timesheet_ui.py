@@ -173,6 +173,17 @@ class TimesheetOCRApp:
         ttk.Label(quality_frame, text="Detect potential OCR errors in project codes",
                  font=('TkDefaultFont', 9, 'italic')).grid(row=0, column=1, padx=5, sticky=tk.W)
 
+        # Add dictionary update button
+        self.update_dict_btn = ttk.Button(
+            quality_frame,
+            text="📚 Update Reference Dictionaries",
+            command=self.update_dictionaries
+        )
+        self.update_dict_btn.grid(row=1, column=0, padx=5, pady=5, sticky=(tk.W, tk.E))
+
+        ttk.Label(quality_frame, text="Rebuild validation dictionaries from current database",
+                 font=('TkDefaultFont', 9, 'italic')).grid(row=1, column=1, padx=5, sticky=tk.W)
+
         # S3 Bucket Information section
         bucket_frame = ttk.LabelFrame(main_frame, text="🪣 S3 Buckets", padding="10")
         bucket_frame.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=10)
@@ -347,6 +358,8 @@ class TimesheetOCRApp:
                   command=self.delete_by_image).pack(side=tk.LEFT, padx=5)
         ttk.Button(db_controls, text="📋 Show Image Source",
                   command=self.show_image_source).pack(side=tk.LEFT, padx=5)
+        ttk.Button(db_controls, text="❌ Export Failed Images",
+                  command=self.export_failed_images).pack(side=tk.LEFT, padx=5)
 
         # Create Treeview for data
         columns = ('Resource', 'Date', 'Project', 'Code', 'Hours', 'Source')
@@ -779,6 +792,65 @@ class TimesheetOCRApp:
             self.log(f"✗ Error deleting entries: {str(e)}")
             messagebox.showerror("Delete Error", f"Failed to delete entries:\n{str(e)}")
 
+    def export_failed_images(self):
+        """Export failed images report to CSV"""
+        try:
+            from src.failed_image_logger import export_failed_images_csv, get_failure_statistics
+
+            self.log("Generating failed images report...")
+
+            # Get statistics
+            stats = get_failure_statistics(table_name)
+
+            if stats['total_failures'] == 0:
+                messagebox.showinfo("No Failures", "No failed images found in database!")
+                self.log("No failed images to export")
+                return
+
+            # Ask where to save
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            default_filename = f"failed_images_{timestamp}.csv"
+
+            filepath = filedialog.asksaveasfilename(
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+                initialfile=default_filename
+            )
+
+            if not filepath:
+                self.log("Export cancelled")
+                return
+
+            # Export to CSV
+            count = export_failed_images_csv(table_name, filepath)
+
+            # Show statistics
+            self.log(f"✓ Exported {count} failures to {filepath}")
+
+            stats_message = (
+                f"Failed Images Export Complete\n\n"
+                f"Total failures: {stats['total_failures']}\n"
+                f"Unique images: {stats['unique_images']}\n"
+                f"Recent (24h): {stats['recent_failures_24h']}\n\n"
+                f"Failure Types:\n"
+            )
+
+            if stats['failure_types']:
+                for ftype, fcount in stats['failure_types'].items():
+                    stats_message += f"  - {ftype}: {fcount}\n"
+
+            stats_message += f"\n✅ Exported to:\n{filepath}"
+
+            messagebox.showinfo("Export Complete", stats_message)
+
+        except ImportError:
+            messagebox.showerror("Error",
+                               "Failed image logging module not found.\n"
+                               "Make sure src/failed_image_logger.py exists.")
+        except Exception as e:
+            self.log(f"✗ Error exporting failed images: {str(e)}")
+            messagebox.showerror("Error", f"Failed to export: {str(e)}")
+
     def _load_data_thread(self):
         """Background thread for loading data"""
         try:
@@ -1192,27 +1264,34 @@ class TimesheetOCRApp:
             self.log(f"✓ Found {len(s3_images)} images in S3")
 
             # Step 2: Get processed images from DynamoDB
+            # NEW APPROACH: Get ALL images that have been successfully stored
+            # We check for actual timesheet entries (not REJECTED or ZERO_HOUR metadata entries)
             self.log("📊 Checking DynamoDB for processed images...")
-            response = table.scan(ProjectionExpression='SourceImage,DateProjectCode')
+
+            # Get all unique SourceImage values from actual timesheet entries
+            response = table.scan(
+                ProjectionExpression='SourceImage,DateProjectCode,ResourceName,#d',
+                FilterExpression='attribute_exists(ResourceName) AND attribute_exists(#d)',
+                ExpressionAttributeNames={'#d': 'Date'}
+            )
             processed_images = set()
 
             for item in response.get('Items', []):
                 source = item.get('SourceImage', '')
-                date_project_code = item.get('DateProjectCode', '')
-                # Only count as processed if it's an actual project entry, not rejected or zero-hour
-                if source and not date_project_code.startswith('REJECTED#') and not date_project_code.startswith('ZERO_HOUR#'):
+                # If it has ResourceName and Date, it's a real timesheet entry
+                if source:
                     processed_images.add(source)
 
             while 'LastEvaluatedKey' in response:
                 response = table.scan(
-                    ProjectionExpression='SourceImage,DateProjectCode',
+                    ProjectionExpression='SourceImage,DateProjectCode,ResourceName,#d',
+                    FilterExpression='attribute_exists(ResourceName) AND attribute_exists(#d)',
+                    ExpressionAttributeNames={'#d': 'Date'},
                     ExclusiveStartKey=response['LastEvaluatedKey']
                 )
                 for item in response.get('Items', []):
                     source = item.get('SourceImage', '')
-                    date_project_code = item.get('DateProjectCode', '')
-                    # Only count as processed if it's an actual project entry, not rejected or zero-hour
-                    if source and not date_project_code.startswith('REJECTED#') and not date_project_code.startswith('ZERO_HOUR#'):
+                    if source:
                         processed_images.add(source)
 
             self.log(f"✓ Found {len(processed_images)} processed images in DB")
@@ -1257,11 +1336,20 @@ class TimesheetOCRApp:
             success_count = 0
             fail_count = 0
 
+            # Track successfully processed images in this session to avoid re-scanning
+            newly_processed_images = set()
+
             for i, image_key in enumerate(failed_images, 1):
                 # Check if user requested stop
                 if self.stop_scan:
                     self.log("⚠️  Scan stopped by user")
                     break
+
+                # Skip if already processed in this session
+                if image_key in newly_processed_images:
+                    self.log(f"[{i}/{len(failed_images)}] Skipping {image_key} - already processed in this session")
+                    success_count += 1
+                    continue
 
                 self.log(f"[{i}/{len(failed_images)}] Processing: {image_key}")
 
@@ -1333,11 +1421,13 @@ class TimesheetOCRApp:
                             # Save to database
                             self._save_ocr_to_database(image_key, ocr_data)
                             self.log(f"  ✓ Success: {ocr_data.get('resource_name', 'Unknown')}")
+                            newly_processed_images.add(image_key)  # Mark as processed
                             success_count += 1
                         elif approval == 'approve':
                             # Save to database
                             self._save_ocr_to_database(image_key, ocr_data)
                             self.log(f"  ✓ Approved: {ocr_data.get('resource_name', 'Unknown')}")
+                            newly_processed_images.add(image_key)  # Mark as processed
                             success_count += 1
                         elif approval == 'reject':
                             self.log(f"  ✗ Rejected by user")
@@ -1367,9 +1457,11 @@ class TimesheetOCRApp:
                                 resource_name = body.get('resource_name', 'Unknown')
                                 entries = body.get('entries_stored', 0)
                                 self.log(f"  ✓ Success: {resource_name} - {entries} entries")
+                                newly_processed_images.add(image_key)  # Mark as processed
                                 success_count += 1
                             else:
                                 self.log(f"  ✓ Processed")
+                                newly_processed_images.add(image_key)  # Mark as processed
                                 success_count += 1
                         else:
                             error_msg = result.get('errorMessage', 'Unknown error')
@@ -1419,6 +1511,83 @@ class TimesheetOCRApp:
                     self.log("🔓 Released scan lock")
             except Exception as e:
                 self.log(f"⚠️  Warning: Could not remove lock file: {e}")
+
+    def update_dictionaries(self):
+        """Update reference dictionaries for field validators."""
+        # Confirm action
+        result = messagebox.askyesno(
+            "Update Reference Dictionaries",
+            "This will scan the database and rebuild the reference dictionaries\n"
+            "used by field validators to auto-correct OCR errors.\n\n"
+            "This may take 1-2 minutes. Continue?",
+            icon='question'
+        )
+
+        if not result:
+            return
+
+        self.log("📚 Updating reference dictionaries...")
+        thread = threading.Thread(target=self._update_dictionaries_thread)
+        thread.daemon = True
+        thread.start()
+
+    def _update_dictionaries_thread(self):
+        """Background thread for updating dictionaries."""
+        try:
+            self.progress.start()
+
+            # Import the extraction logic from create_dictionaries.py
+            import subprocess
+            import sys
+
+            # Get the script path
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            script_path = os.path.join(script_dir, 'create_dictionaries.py')
+
+            # Run the dictionary extraction script
+            self.log("   Scanning database for high-quality records...")
+            result = subprocess.run(
+                [sys.executable, script_path],
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 minute timeout
+            )
+
+            self.progress.stop()
+
+            if result.returncode == 0:
+                # Parse the output to extract statistics
+                output_lines = result.stdout.split('\n')
+                stats = {}
+                for line in output_lines:
+                    if 'Project Codes:' in line:
+                        stats['project_codes'] = line.split(':')[1].strip()
+                    elif 'Person Names:' in line:
+                        stats['person_names'] = line.split(':')[1].strip()
+
+                success_msg = "✅ Reference dictionaries updated successfully!\n\n"
+                if stats:
+                    success_msg += f"Project Codes: {stats.get('project_codes', 'N/A')}\n"
+                    success_msg += f"Person Names: {stats.get('person_names', 'N/A')}\n"
+                success_msg += "\nLambda functions will use the updated dictionaries on next invocation."
+
+                self.log(success_msg.replace('\n', ' '))
+                self.root.after(0, messagebox.showinfo, "Dictionaries Updated", success_msg)
+            else:
+                error_msg = f"Failed to update dictionaries:\n{result.stderr}"
+                self.log(f"❌ {error_msg}")
+                self.root.after(0, messagebox.showerror, "Update Failed", error_msg)
+
+        except subprocess.TimeoutExpired:
+            self.progress.stop()
+            error_msg = "Dictionary update timed out (>5 minutes)"
+            self.log(f"❌ {error_msg}")
+            self.root.after(0, messagebox.showerror, "Timeout", error_msg)
+        except Exception as e:
+            self.progress.stop()
+            error_msg = f"Failed to update dictionaries: {str(e)}"
+            self.log(f"❌ {error_msg}")
+            self.root.after(0, messagebox.showerror, "Update Failed", error_msg)
 
     def find_similar_codes(self):
         """Find similar project codes that might be OCR errors."""

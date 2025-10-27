@@ -1,0 +1,30 @@
+# OCR Solution Version
+# Update this file whenever you make significant changes to the OCR system
+# Format: MAJOR.MINOR.PATCH-DESCRIPTION
+
+VERSION=2.3.1
+BUILD_DATE=2025-10-26
+DESCRIPTION=Fixed Field Validator Decimal Rounding (CRITICAL FIX)
+
+# Changelog:
+# 2.3.1 (2025-10-26): CRITICAL FIX - Fixed field validator incorrectly rounding hours to 0.25 increments
+#   - Removed overly aggressive 0.25 increment rounding in validate_hours()
+#   - Changed from: hours = round(hours * 4) / 4 (forces 0.25 increments)
+#   - Changed to: hours = round(hours, 2) (allows any decimal value)
+#   - Clarity allows ANY decimal hour values (e.g., 5.63, 3.75, 1.37)
+#   - This fixes validation failures on simple timesheets with non-quarter-hour values
+# 2.3.0 (2025-10-26): CRITICAL FIX - Added wrong-day assignment detection to prevent database date errors
+#   - Extracts calendar day numbers from timesheet header (e.g., "Mon. 18", "Tue. 19")
+#   - Cross-validates header days against expected week dates from date range
+#   - Detects column misalignments that cause hours to be stored on wrong calendar dates
+#   - Marks timesheets as INVALID if days don't match expected dates
+#   - This fixes the BLOCKING ISSUE where Textract table structure errors caused wrong-date assignments
+# 2.2.0 (2025-10-26): ACCURACY IMPROVEMENT - Added field validators with auto-correction for hours and project codes
+#   - Auto-corrects missing decimals (75 → 7.5), double entries (15.0 → 7.5), OCR letter/number substitutions
+#   - Reference dictionaries extracted from database (29 project codes, 16 person names)
+#   - Edit distance and transposition detection for project codes
+#   - Expected accuracy improvement: 90% → 97-98%
+# 2.1.0 (2025-10-25): CRITICAL FIX - Disabled bank holiday enforcement (people can work on bank holidays)
+# 2.0.0 (2025-10-25): Switched to Amazon Nova Lite (200 req/min), added real-time coverage tracking, fixed infinite rescan loop
+# 1.5.0 (2025-10-24): Added performance monitoring, bank holiday detection, zero-hour timesheet support
+# 1.0.0 (2025-10-20): Initial Claude Sonnet implementation with basic OCR
