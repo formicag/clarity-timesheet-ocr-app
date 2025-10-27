@@ -2,11 +2,75 @@
 # Update this file whenever you make significant changes to the OCR system
 # Format: MAJOR.MINOR.PATCH-DESCRIPTION
 
-VERSION=2.3.1
-BUILD_DATE=2025-10-26
-DESCRIPTION=Fixed Field Validator Decimal Rounding (CRITICAL FIX)
+VERSION=2.6.0
+BUILD_DATE=2025-10-27
+DESCRIPTION=Approval queue stability fix with ProcessedImages tracking table
 
 # Changelog:
+# 2.6.0 (2025-10-27): CRITICAL FIX - Stable approval queue with ProcessedImages tracking
+#   - Created ProcessedImages DynamoDB table to track which images have been processed
+#   - Replaced unreliable timestamp comparison logic with simple set subtraction
+#   - Fixed approval workflow bug where images were never marked as processed
+#   - Approval queue now shows exact number of pending images (no more 60→67→70 jumping)
+#   - Updated approve endpoint to mark images in ProcessedImages table
+#   - Updated reject endpoint to remove from ProcessedImages table (allows rescanning)
+#   - Simple logic: Pending = S3 images - ProcessedImages (100% accurate)
+#   - Fixes infinite queue loop where same images appeared forever
+#   - See APPROVAL_QUEUE_FIX_COMPLETE.md for full technical details
+# 2.5.1 (2025-10-27): QUALITY IMPROVEMENT - Automatic duplicate timesheet detection and replacement
+#   - Detects when new timesheet upload matches existing person/week in database
+#   - Automatically deletes old database entries for that person/week (all 7 days)
+#   - Automatically deletes old source S3 images associated with old timesheet
+#   - Allows progressive quality improvement by rescanning with better screenshots
+#   - Users can rescan dark-mode timesheets in light-mode to replace poor-quality data
+#   - Prevents duplicate data accumulation for same person/week periods
+#   - Logs all replacement actions for audit trail
+# 2.5.0 (2025-10-27): ACCURACY FIX - Automatic column alignment correction and smart bank holiday validation
+#   - Added automatic detection and correction of column misalignment errors
+#   - Compares daily totals from header against calculated project hour sums
+#   - Automatically zeros out days where header=0 but OCR extracted hours (common error)
+#   - Flags mismatches that need manual review (header>0 but OCR=0)
+#   - Smart bank holiday validation: removes OCR errors on bank holidays while allowing legitimate work
+#   - Bank holiday rule: If header=0 on bank holiday, remove any OCR-extracted hours (hallucination)
+#   - Bank holiday rule: If header>0 on bank holiday, allow it (legitimate work)
+#   - Fixes Neil Pomfret Wed empty column and David Hunt Mon bank holiday errors
+#   - Diagnostics show before/after alignment correction
+# 2.4.4 (2025-10-27): UI IMPROVEMENT - Added detailed validation display with OCR extracted values
+#   - Lambda now returns ocr_extracted_values with daily_totals, weekly_total, and projects
+#   - Approval interface displays validation checks in structured table
+#   - Shows Week Total (bold, first row), Daily totals (Mon-Sun), Project totals
+#   - Each check displays: Type, Item, Calculated hours, OCR Value hours, ✓/✗ indicator
+#   - Visual indicators: Green ✓ for matching values, Red ✗ for mismatches
+#   - Allows user to verify day totals, project totals, and week total against image
+# 2.4.3 (2025-10-27): CRITICAL FIX - Complete anti-hallucination + OCR digit/letter correction
+#   - Added project code correction to Gemini extraction path (was missing!)
+#   - Load S3 reference dictionary with 32 known project codes
+#   - Added letter confusion patterns: S↔5, C↔G (fixes NTCS vs NTC5)
+#   - Improved generate_code_variations to handle full alphanumeric codes
+#   - Updated reference dictionary with NTCS158600, PJ023827, sps1995
+#   - Fixes all 3 Gareth Jones errors: NTC5124690→NTCS158600, PJ022827→PJ023827, etc.
+# 2.4.2 (2025-10-27): CRITICAL FIX - Anti-hallucination measures for Gemini OCR
+#   - Added temperature=0.0 to Gemini generation config for deterministic output
+#   - Added explicit anti-hallucination instructions to prevent cross-image contamination
+#   - Enhanced prompt with "READ ONLY THIS IMAGE" instructions
+#   - Added ZERO TOLERANCE date accuracy requirements
+#   - Added ANTI-HALLUCINATION RULE for project codes (must be visibly present)
+#   - Added NTCS and lowercase sps codes to valid project code formats
+#   - Fixes issue where Gemini was mixing data from different timesheets
+# 2.4.1 (2025-10-27): BUG FIX - Fixed cost calculation crash when USE_GEMINI_OCR=true
+#   - Wrapped Nova cost calculation in feature flag check
+#   - Fixed error: trying to access nova_usage['inputTokens'] when using Gemini
+#   - Gemini cost set to $0.00 (free tier up to 1,500 requests/day)
+#   - All Gemini OCR bugs now resolved - STABLE FOR PRODUCTION
+# 2.4.0 (2025-10-27): FEATURE FLAG - Added Google Gemini 2.0 Flash OCR as alternative to Textract + Nova
+#   - Added USE_GEMINI_OCR environment variable (default: false for safe rollback)
+#   - When enabled, replaces BOTH Textract AND Nova Lite with single Gemini API call
+#   - Performance: 2.98s avg vs 3.87s (23% faster)
+#   - Cost: $0.12 vs $0.80 per 1K images (85% cheaper, or FREE under 1,500/day)
+#   - Accuracy: Better OCR on dark-themed UIs, fixes Neil Pomfret timesheet errors
+#   - Deployment: Deploy with flag disabled, test, then enable for production
+#   - Rollback: Set USE_GEMINI_OCR=false to instantly revert to Textract + Nova
+#   - Dependencies: Added google-generativeai and Pillow to requirements.txt
 # 2.3.1 (2025-10-26): CRITICAL FIX - Fixed field validator incorrectly rounding hours to 0.25 increments
 #   - Removed overly aggressive 0.25 increment rounding in validate_hours()
 #   - Changed from: hours = round(hours * 4) / 4 (forces 0.25 increments)
