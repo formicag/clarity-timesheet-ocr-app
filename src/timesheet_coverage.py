@@ -185,23 +185,39 @@ def generate_coverage_report(clarity_month: str,
     # Load team roster
     team_members = load_team_roster()
 
-    # OPTIMIZED: Query coverage tracker data for all team members at once
-    from src.coverage_tracker import get_coverage_for_person
+    # Query actual timesheet data (since coverage tracker data doesn't exist)
+    dynamodb = boto3.resource('dynamodb', region_name=region)
+    table = dynamodb.Table(dynamodb_table)
 
-    # Build coverage matrix from pre-computed data
+    # Build coverage matrix by querying actual timesheets
     coverage = {}
     for person in team_members:
         resource_name = person.replace(' ', '_')
-
-        # Get coverage data for this person/month (single query!)
-        coverage_data = get_coverage_for_person(dynamodb_table, resource_name, clarity_month)
-        weeks_submitted = coverage_data.get('weeks_submitted', set())
-
-        # Build week-by-week coverage
         coverage[person] = {}
+
+        # Check each week
         for week in weeks:
             week_str = week.strftime('%Y-%m-%d')
-            coverage[person][week_str] = week_str in weeks_submitted
+
+            # Query for ANY timesheet entry for this person in this week
+            # DateProjectCode format: YYYY-MM-DD#PROJECT_CODE
+            try:
+                response = table.query(
+                    KeyConditionExpression='ResourceName = :name AND begins_with(DateProjectCode, :week)',
+                    ExpressionAttributeValues={
+                        ':name': resource_name,
+                        ':week': week_str
+                    },
+                    Limit=1  # We just need to know if ANY entry exists
+                )
+
+                # Week is submitted if we found at least one entry
+                has_timesheet = len(response.get('Items', [])) > 0
+                coverage[person][week_str] = has_timesheet
+
+            except Exception as e:
+                print(f"Error querying {person} for week {week_str}: {e}")
+                coverage[person][week_str] = False
 
     # Calculate statistics
     total_expected = len(team_members) * len(weeks)
@@ -364,6 +380,69 @@ def format_coverage_report_csv(report: Dict) -> str:
         writer.writerow(row)
 
     return output.getvalue()
+
+
+def format_missing_timesheets(report: Dict) -> str:
+    """
+    Format missing timesheets as a text list for re-scanning.
+
+    Args:
+        report: Report from generate_coverage_report()
+
+    Returns:
+        Text list of missing timesheets with resource names and date ranges
+    """
+    lines = []
+
+    lines.append("=" * 80)
+    lines.append(f"MISSING TIMESHEETS - {report['clarity_month']}")
+    lines.append("=" * 80)
+    lines.append("")
+    lines.append(f"Period: {report['period']['start']} to {report['period']['end']}")
+    lines.append(f"Total missing: {report['statistics']['total_missing']} timesheets")
+    lines.append("")
+    lines.append("FORMAT: Resource Name | Week Start (Monday) | Week End (Sunday)")
+    lines.append("-" * 80)
+    lines.append("")
+
+    coverage = report['coverage']
+    weeks = report['weeks']
+
+    missing_count = 0
+
+    # Iterate through each person and their weeks
+    for person in sorted(coverage.keys()):
+        person_weeks = coverage[person]
+        person_missing = []
+
+        # Find all missing weeks for this person
+        for week_str in weeks:
+            if not person_weeks.get(week_str, False):
+                # Calculate week end (Sunday = Monday + 6 days)
+                week_start = datetime.strptime(week_str, '%Y-%m-%d')
+                week_end = week_start + timedelta(days=6)
+
+                person_missing.append({
+                    'start': week_start,
+                    'end': week_end,
+                    'start_str': week_start.strftime('%a %d %b %Y'),
+                    'end_str': week_end.strftime('%a %d %b %Y')
+                })
+
+        # Output missing weeks for this person
+        if person_missing:
+            for week_info in person_missing:
+                lines.append(
+                    f"{person.ljust(25)} | {week_info['start_str']} | {week_info['end_str']}"
+                )
+                missing_count += 1
+
+    lines.append("")
+    lines.append("=" * 80)
+    lines.append(f"Total missing timesheets: {missing_count}")
+    lines.append("=" * 80)
+
+    return "\n".join(lines)
 
 
 if __name__ == '__main__':

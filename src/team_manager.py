@@ -33,13 +33,17 @@ class TeamManager:
 
     def save_roster(self):
         """Save team roster to JSON file"""
-        data = {
-            'team_members': sorted(self.team_members),
-            'name_aliases': self.name_aliases
-        }
+        try:
+            data = {
+                'team_members': sorted(self.team_members),
+                'name_aliases': self.name_aliases
+            }
 
-        with open(self.roster_file, 'w') as f:
-            json.dump(data, f, indent=2)
+            with open(self.roster_file, 'w') as f:
+                json.dump(data, f, indent=2)
+        except (OSError, IOError) as e:
+            # In Lambda, filesystem is read-only - silently skip saving
+            pass
 
     def add_member(self, name):
         """Add a team member"""

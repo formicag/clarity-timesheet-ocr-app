@@ -216,9 +216,10 @@ def normalize_project_code(project_code: str) -> str:
     # Project codes typically start with 'PJ' followed by digits
     normalized = project_code.upper()
 
-    # Special case: NTCS should be NTC5 (S is misread 5)
-    if normalized.startswith('NTCS'):
-        normalized = 'NTC5' + normalized[4:]
+    # REMOVED INCORRECT NORMALIZATION:
+    # Old code wrongly converted NTCS→NTC5, but NTCS158600 is a valid code!
+    # Project code correction in project_code_correction.py now handles this properly
+    # using the master codes dictionary
 
     # If it starts with 'PJ', ensure the rest are digits
     if normalized.startswith('PJ'):

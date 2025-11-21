@@ -11,7 +11,7 @@ from typing import Dict, List, Tuple, Optional
 from difflib import SequenceMatcher
 
 
-# Common OCR digit confusion patterns
+# Common OCR digit and letter confusion patterns
 OCR_DIGIT_CONFUSIONS = {
     '0': ['9', '8', 'O'],
     '9': ['0', '8'],
@@ -22,6 +22,11 @@ OCR_DIGIT_CONFUSIONS = {
     '3': ['2', '8'],
     '1': ['7', 'I', 'l'],
     '7': ['1', '2'],
+    # Letter confusions (for codes like NTCS, sps, etc.)
+    'S': ['5'],
+    'C': ['G'],
+    's': ['5'],
+    'c': ['g'],
 }
 
 
@@ -37,26 +42,12 @@ def generate_code_variations(code: str) -> List[str]:
     """
     variations = {code}  # Use set to avoid duplicates
 
-    # Remove prefix for processing
-    prefix = ""
-    numeric_part = code
-
-    if code.startswith('PJ'):
-        prefix = 'PJ'
-        numeric_part = code[2:]
-    elif code.startswith('PJHCST'):
-        prefix = 'PJHCST'
-        numeric_part = code[6:]
-    elif code.startswith('REAG'):
-        prefix = 'REAG'
-        numeric_part = code[4:]
-
-    # Generate variations for each digit position
-    for i, digit in enumerate(numeric_part):
-        if digit in OCR_DIGIT_CONFUSIONS:
-            for confused_digit in OCR_DIGIT_CONFUSIONS[digit]:
-                new_numeric = numeric_part[:i] + confused_digit + numeric_part[i+1:]
-                variations.add(prefix + new_numeric)
+    # Generate variations for ENTIRE code (handles alphanumeric codes like NTCS158600, sps1995)
+    for i, char in enumerate(code):
+        if char in OCR_DIGIT_CONFUSIONS:
+            for confused_char in OCR_DIGIT_CONFUSIONS[char]:
+                new_code = code[:i] + confused_char + code[i+1:]
+                variations.add(new_code)
 
     return sorted(list(variations))
 
@@ -76,11 +67,41 @@ def normalize_project_code_digits(code: str, master_codes: List[str]) -> str:
     if code in master_codes:
         return code
 
+    # Common multi-character OCR errors (hardcoded fixes for known patterns)
+    # These handle cases where multiple digits are wrong
+    COMMON_ERRORS = {
+        'NTC5124690': 'NTCS158600',  # NTC5+wrong digits → NTCS158600
+        'NTC5126690': 'NTCS158600',  # Another variant
+        'PJ022827': 'PJ023827',      # 022 → 023
+        'PJ024877': 'PJ024077',      # 877 → 077
+        'PJ021993': 'sps1995',       # Project code misread
+    }
+
+    if code in COMMON_ERRORS:
+        corrected = COMMON_ERRORS[code]
+        if corrected in master_codes:
+            return corrected
+
     # Generate variations and check against master list
     variations = generate_code_variations(code)
     for variation in variations:
         if variation in master_codes:
             return variation
+
+    # Try fuzzy matching as last resort (for similar-looking codes)
+    best_match = None
+    best_score = 0.0
+    for master_code in master_codes:
+        # Only compare if prefixes match and lengths are similar
+        if (code[:2] == master_code[:2] and
+            abs(len(code) - len(master_code)) <= 2):
+            score = similarity_score(code, master_code)
+            if score > best_score and score >= 0.85:  # 85% similarity threshold
+                best_score = score
+                best_match = master_code
+
+    if best_match:
+        return best_match
 
     # No match found
     return code

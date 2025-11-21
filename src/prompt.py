@@ -123,20 +123,34 @@ If you see a name that's close but not exact, use the closest match from the lis
 
     base_prompt = """You are an expert OCR system specialized in extracting timesheet data from images.
 
+**CRITICAL ANTI-HALLUCINATION RULES**:
+1. Extract data ONLY from the pixels you can see in THIS image
+2. Do NOT use any memorized data from previous images or training
+3. Do NOT make up project codes - they must be visibly present in parentheses
+4. Do NOT guess dates - extract the EXACT date range shown at the top
+5. If you cannot read something clearly, indicate "UNCLEAR" - do NOT fabricate
+
 Your task is to analyze the timesheet image and extract the following information with PERFECT ACCURACY:
 
-1. **Resource Name**: The name of the person whose timesheet this is
-2. **Time Period**: The date range for this timesheet (format: "MMM DD YYYY - MMM DD YYYY")
+1. **Resource Name**: The name of the person whose timesheet this is (shown at top of screen)
+2. **Time Period**: The EXACT date range shown in "Previous Time Period" dropdown (format: "MMM DD YYYY - MMM DD YYYY")
+   - CRITICAL: Look at the dropdown that shows "Oct 6 2025 - Oct 12 2025" or similar
+   - Extract the EXACT text from this dropdown - do not calculate or guess dates
 3. **Zero-Hour Detection**: Determine if this is a zero-hour timesheet (annual leave, absence, etc.)
-4. **Projects**: For each project listed, extract:
+4. **Projects**: For EACH project VISIBLE in the table, extract:
    - Project Name (the parent project name, not the subtask)
-   - Project Code (format: PJXXXXXX where X are digits)
+   - Project Code (in parentheses after project name - must be VISIBLE in image)
    - Hours for each day of the week: Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday
    - Empty cells or cells with "-" should be recorded as 0 hours
 """ + team_roster_section + """
 **CRITICAL REQUIREMENTS:**
 
-**Date Accuracy**: The time period dates are CRITICAL. You must extract the exact date range shown at the top of the timesheet.
+**Date Accuracy - ZERO TOLERANCE FOR ERRORS**:
+- The time period dates are CRITICAL and must be extracted EXACTLY as shown
+- Look for the date range in the top-left area near "Previous Time Period" or similar dropdown
+- Extract character-by-character what you see - do NOT calculate week ranges
+- Common format: "Oct 6 2025 - Oct 12 2025" or "Jul 29 2025 - Aug 4 2025"
+- If the date range is not clearly visible, return "UNCLEAR" - do NOT guess
 
 **Project Structure**: Timesheets show projects with subtasks underneath. We want:
 - The PARENT PROJECT NAME (the top-level project)
@@ -149,16 +163,26 @@ Your task is to analyze the timesheet image and extract the following informatio
 
 **CRITICAL - Project Code and Name Format Rules**:
 
+**ANTI-HALLUCINATION RULE**: Only extract project codes that are VISIBLY PRESENT in parentheses in THIS image!
+- If you cannot see a project code in parentheses, DO NOT extract that project
+- Do NOT invent project codes based on project names
+- Do NOT use project codes from your memory or training data
+- Each project code must be pixel-by-pixel visible in the image
+
 1. **Project Code Location**: The project code MUST appear in parentheses at the END of the project name
    - ✅ CORRECT: "IN Replacement - HPE (PJ023275)"
-   - ❌ WRONG: "IN Replacement - HPE" (missing code)
+   - ✅ CORRECT: "DTV Storage Compute Refresh (NTCS158600)"
+   - ✅ CORRECT: "Store Influx (sps1995)"
+   - ❌ WRONG: "IN Replacement - HPE" (missing code - DO NOT extract this project)
    - ❌ WRONG: "PJ023275 IN Replacement - HPE" (code at start)
 
 2. **Project Code Format**: Valid codes start with:
-   - "PJ" followed by 6-8 digits (e.g., PJ024483, PJHCST314980)
+   - "PJ" followed by 6-8 digits (e.g., PJ024483, PJ023827, PJHCST314980)
+   - "NTCS" followed by digits (e.g., NTCS158600)
    - "REAG" followed by digits (e.g., REAG042910)
    - "HCST" followed by digits (e.g., HCST314980)
    - "NTC5" followed by digits (e.g., NTC5124690)
+   - Lowercase codes like "sps" followed by digits (e.g., sps1995)
 
 3. **NOT Valid Project Codes** (DO NOT extract these):
    - Category labels: DESIGN, DESIGNA, LABOUR, TESTING, BUILD, DEPLOY, BLDDPLYTEST

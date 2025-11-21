@@ -8,9 +8,6 @@ Globals:
     MemorySize: 1024
     Runtime: python3.13
     Tracing: Active
-    Tags:
-      Project: TimesheetOCR
-      ManagedBy: SAM
 
 Parameters:
   Environment:
@@ -36,25 +33,8 @@ Resources:
 
   InputBucket:
     Type: AWS::S3::Bucket
-    DependsOn: S3InvokeLambdaPermission
     Properties:
       BucketName: !Sub 'timesheetocr-input-${Environment}-${AWS::AccountId}'
-      NotificationConfiguration:
-        LambdaConfigurations:
-          - Event: s3:ObjectCreated:*
-            Function: !GetAtt OCRFunction.Arn
-            Filter:
-              S3Key:
-                Rules:
-                  - Name: suffix
-                    Value: .png
-          - Event: s3:ObjectCreated:*
-            Function: !GetAtt OCRFunction.Arn
-            Filter:
-              S3Key:
-                Rules:
-                  - Name: suffix
-                    Value: .jpg
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -209,6 +189,27 @@ Resources:
               Action:
                 - sqs:SendMessage
               Resource: !GetAtt DeadLetterQueue.Arn
+      Events:
+        S3Upload:
+          Type: S3
+          Properties:
+            Bucket: !Ref InputBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: suffix
+                    Value: .png
+        S3UploadJpg:
+          Type: S3
+          Properties:
+            Bucket: !Ref InputBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: suffix
+                    Value: .jpg
       Tags:
         Environment: !Ref Environment
         CostCenter: TimesheetOCR
@@ -250,6 +251,128 @@ Resources:
         Environment: !Ref Environment
         CostCenter: TimesheetOCR
 
+  # ==================== MCP FACADE LAMBDA FUNCTIONS ====================
+
+  MCPOverviewFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'TimesheetOCR-mcp-overview-${Environment}'
+      CodeUri: src/
+      Handler: mcp/overview.lambda_handler
+      Description: MCP facade - System overview and statistics
+      Timeout: 30
+      MemorySize: 512
+      Environment:
+        Variables:
+          DYNAMODB_TABLE: !Ref TimesheetTable
+          ENVIRONMENT: !Ref Environment
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref TimesheetTable
+      Events:
+        GetOverview:
+          Type: Api
+          Properties:
+            Path: /api/mcp/overview
+            Method: GET
+            RestApiId: !Ref MCPApi
+            Auth:
+              ApiKeyRequired: true
+      Tags:
+        Project: clarity-timesheet-mcp-chatgpt
+        Purpose: experiment
+        Environment: !Ref Environment
+
+  MCPCoverageFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'TimesheetOCR-mcp-coverage-${Environment}'
+      CodeUri: src/
+      Handler: mcp/coverage.lambda_handler
+      Description: MCP facade - Coverage reports for Clarity months
+      Timeout: 30
+      MemorySize: 512
+      Environment:
+        Variables:
+          DYNAMODB_TABLE: !Ref TimesheetTable
+          ENVIRONMENT: !Ref Environment
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref TimesheetTable
+      Events:
+        GetCoverage:
+          Type: Api
+          Properties:
+            Path: /api/mcp/coverage
+            Method: GET
+            RestApiId: !Ref MCPApi
+            Auth:
+              ApiKeyRequired: true
+      Tags:
+        Project: clarity-timesheet-mcp-chatgpt
+        Purpose: experiment
+        Environment: !Ref Environment
+
+  MCPPersonSummaryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'TimesheetOCR-mcp-person-summary-${Environment}'
+      CodeUri: src/
+      Handler: mcp/person_summary.lambda_handler
+      Description: MCP facade - Person-specific hours breakdown
+      Timeout: 30
+      MemorySize: 512
+      Environment:
+        Variables:
+          DYNAMODB_TABLE: !Ref TimesheetTable
+          ENVIRONMENT: !Ref Environment
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref TimesheetTable
+      Events:
+        GetPersonSummary:
+          Type: Api
+          Properties:
+            Path: /api/mcp/person-summary
+            Method: GET
+            RestApiId: !Ref MCPApi
+            Auth:
+              ApiKeyRequired: true
+      Tags:
+        Project: clarity-timesheet-mcp-chatgpt
+        Purpose: experiment
+        Environment: !Ref Environment
+
+  MCPTeamMembersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'TimesheetOCR-mcp-team-members-${Environment}'
+      CodeUri: src/
+      Handler: mcp/team_members.lambda_handler
+      Description: MCP facade - Team roster list
+      Timeout: 30
+      MemorySize: 512
+      Environment:
+        Variables:
+          DYNAMODB_TABLE: !Ref TimesheetTable
+          ENVIRONMENT: !Ref Environment
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref TimesheetTable
+      Events:
+        GetTeamMembers:
+          Type: Api
+          Properties:
+            Path: /api/mcp/team-members
+            Method: GET
+            RestApiId: !Ref MCPApi
+            Auth:
+              ApiKeyRequired: true
+      Tags:
+        Project: clarity-timesheet-mcp-chatgpt
+        Purpose: experiment
+        Environment: !Ref Environment
+
   ReportApi:
     Type: AWS::Serverless::Api
     Properties:
@@ -263,16 +386,21 @@ Resources:
         Environment: !Ref Environment
         CostCenter: TimesheetOCR
 
-  # ==================== S3 EVENT CONFIGURATION ====================
-
-  S3InvokeLambdaPermission:
-    Type: AWS::Lambda::Permission
+  MCPApi:
+    Type: AWS::Serverless::Api
     Properties:
-      FunctionName: !GetAtt OCRFunction.Arn
-      Action: lambda:InvokeFunction
-      Principal: s3.amazonaws.com
-      SourceArn: !Sub '${InputBucket.Arn}'
-      SourceAccount: !Ref 'AWS::AccountId'
+      Name: !Sub 'TimesheetOCR-MCP-API-${Environment}'
+      StageName: !Ref Environment
+      Cors:
+        AllowMethods: "'GET,OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,x-api-key'"
+        AllowOrigin: "'*'"
+      Auth:
+        ApiKeyRequired: true
+      Tags:
+        Project: clarity-timesheet-mcp-chatgpt
+        Purpose: experiment
+        Environment: !Ref Environment
 
   # ==================== CLOUDWATCH LOG GROUPS ====================
 
@@ -286,6 +414,30 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub '/aws/lambda/TimesheetOCR-report-${Environment}'
+      RetentionInDays: !If [IsProduction, 90, 30]
+
+  MCPOverviewFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/TimesheetOCR-mcp-overview-${Environment}'
+      RetentionInDays: !If [IsProduction, 90, 30]
+
+  MCPCoverageFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/TimesheetOCR-mcp-coverage-${Environment}'
+      RetentionInDays: !If [IsProduction, 90, 30]
+
+  MCPPersonSummaryFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/TimesheetOCR-mcp-person-summary-${Environment}'
+      RetentionInDays: !If [IsProduction, 90, 30]
+
+  MCPTeamMembersFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/TimesheetOCR-mcp-team-members-${Environment}'
       RetentionInDays: !If [IsProduction, 90, 30]
 
   # ==================== SNS TOPIC FOR ALARMS ====================
@@ -319,7 +471,7 @@ Resources:
       ComparisonOperator: GreaterThanThreshold
       Dimensions:
         - Name: FunctionName
-          Value: !Ref OCRFunction
+          Value: !Sub 'TimesheetOCR-ocr-${Environment}'
       AlarmActions:
         - !Ref AlarmTopic
       TreatMissingData: notBreaching
@@ -339,7 +491,7 @@ Resources:
       ComparisonOperator: GreaterThanThreshold
       Dimensions:
         - Name: FunctionName
-          Value: !Ref OCRFunction
+          Value: !Sub 'TimesheetOCR-ocr-${Environment}'
       AlarmActions:
         - !Ref AlarmTopic
       TreatMissingData: notBreaching
@@ -387,7 +539,7 @@ Resources:
                 "title": "Lambda Metrics",
                 "period": 300,
                 "dimensions": {
-                  "FunctionName": ["${OCRFunction}"]
+                  "FunctionName": ["TimesheetOCR-ocr-${Environment}"]
                 }
               }
             },
@@ -409,7 +561,7 @@ Resources:
                   }
                 },
                 "dimensions": {
-                  "FunctionName": ["${OCRFunction}"]
+                  "FunctionName": ["TimesheetOCR-ocr-${Environment}"]
                 }
               }
             },
@@ -425,7 +577,7 @@ Resources:
                 "title": "Dead Letter Queue Messages",
                 "period": 300,
                 "dimensions": {
-                  "QueueName": ["${DeadLetterQueue.QueueName}"]
+                  "QueueName": ["TimesheetOCR-dlq-${Environment}"]
                 }
               }
             }
@@ -478,3 +630,15 @@ Outputs:
     Value: !Ref ReportApi
     Export:
       Name: !Sub 'TimesheetOCR-ApiId-${Environment}'
+
+  MCPApiUrl:
+    Description: MCP API Gateway endpoint for ChatGPT integration
+    Value: !Sub 'https://${MCPApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
+    Export:
+      Name: !Sub 'TimesheetOCR-MCPApiUrl-${Environment}'
+
+  MCPApiId:
+    Description: MCP API Gateway ID
+    Value: !Ref MCPApi
+    Export:
+      Name: !Sub 'TimesheetOCR-MCPApiId-${Environment}'

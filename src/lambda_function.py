@@ -19,22 +19,25 @@ import random
 import hashlib
 from typing import Dict, Any, Tuple, Optional
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from dynamodb_handler import store_timesheet_entries, store_rejected_timesheet
 from duplicate_detection import check_for_existing_entries
 from utils import parse_date_range
 from validation import validate_timesheet_data, format_validation_report
+from auto_correct import enhanced_correct, is_valid as is_timesheet_valid
 from team_manager import TeamManager
 from parsing import calculate_cost_estimate
 from performance import PerformanceTimer, PerformanceMetrics, create_logger
 from failed_image_logger import log_failed_image, get_attempt_count
 from ocr_version import OCR_VERSION
 from field_validators import FieldValidator, validate_timesheet_data_fields
+from column_alignment_fixer import fix_column_alignment, get_alignment_diagnostics
 
 # Environment variables
 DYNAMODB_TABLE = os.environ.get('DYNAMODB_TABLE', '')
 ENVIRONMENT = os.environ.get('ENVIRONMENT', 'dev')
+USE_GEMINI_OCR = os.environ.get('USE_GEMINI_OCR', 'false').lower() == 'true'
 
 # AWS clients
 s3_client = boto3.client('s3')
@@ -267,6 +270,119 @@ IMPORTANT: The resource_name must be a person's actual name (first name and last
                 import traceback
                 log(f"Stack trace:\n{traceback.format_exc()}", "ERROR")
                 raise
+
+
+def extract_complete_timesheet_with_gemini(bucket: str, key: str, image_bytes: bytes = None) -> Tuple[Dict, Dict, Dict, float]:
+    """
+    Use Google Gemini 2.0 Flash to extract COMPLETE timesheet data (metadata + all project hours).
+    This replaces BOTH extract_metadata_with_claude() AND extract_table_with_textract().
+
+    Returns:
+        Tuple of (metadata, timesheet_data, usage_stats, extraction_time_seconds)
+        where:
+        - metadata: {'resource_name': str, 'date_range': str, 'status': str}
+        - timesheet_data: Complete parsed timesheet with projects and hours
+        - usage_stats: Empty dict (Gemini doesn't provide token counts in same format)
+        - extraction_time_seconds: Total time for extraction
+    """
+    operation_start = time.time()
+
+    # Download if not provided
+    if image_bytes is None:
+        with PerformanceTimer("Download for Gemini", log):
+            response = s3_client.get_object(Bucket=bucket, Key=key)
+            image_bytes = response['Body'].read()
+
+    log(f"Using Google Gemini 2.0 Flash for complete timesheet extraction")
+
+    # Import the Gemini module and get the OCR prompt
+    from gemini_ocr import extract_metadata_with_gemini
+    from prompt import get_ocr_prompt
+
+    # Get the complete OCR prompt (includes all instructions for full extraction)
+    full_prompt = get_ocr_prompt(enable_grid_mode=True)
+
+    try:
+        with PerformanceTimer("Gemini Complete OCR", log):
+            # Call Gemini with complete extraction prompt
+            gemini_response = extract_metadata_with_gemini(image_bytes, full_prompt)
+
+            # Extract the complete data
+            complete_data = gemini_response['data']
+            log(f"✅ Gemini extraction complete using model: {gemini_response['model']}")
+
+            # Apply project code corrections to fix common OCR errors
+            from project_code_correction import correct_project_data, normalize_project_code_digits
+
+            # Load master project codes from S3 for correction
+            master_codes = []
+            try:
+                dict_key = 'dictionaries/reference_data.json'
+                dict_response = s3_client.get_object(Bucket=bucket, Key=dict_key)
+                dict_data = json.loads(dict_response['Body'].read().decode('utf-8'))
+                master_codes = dict_data.get('project_codes', [])
+                log(f"📚 Loaded {len(master_codes)} project codes for correction")
+            except Exception as e:
+                log(f"⚠️  Could not load project code dictionary: {e}")
+
+            raw_projects = complete_data.get('projects', [])
+            corrected_projects = []
+
+            for project in raw_projects:
+                raw_code = project.get('project_code', '')
+                log(f"🔍 Checking project code: '{raw_code}'")
+                # Apply OCR digit correction using master codes
+                corrected_code = normalize_project_code_digits(raw_code, master_codes)
+
+                if corrected_code != raw_code:
+                    log(f"📝 Corrected project code: {raw_code} → {corrected_code}")
+                else:
+                    log(f"  ✓ Project code '{raw_code}' is correct (or no correction found)")
+
+                # Update project with corrected code
+                corrected_project = project.copy()
+                corrected_project['project_code'] = corrected_code
+                corrected_projects.append(corrected_project)
+
+            # Parse into metadata and timesheet_data structures
+            # Metadata (for compatibility with existing code)
+            metadata = {
+                'resource_name': complete_data.get('resource_name', ''),
+                'date_range': complete_data.get('date_range', ''),
+                'status': 'Posted'  # Assume posted for now, can be extracted if needed
+            }
+
+            # Timesheet data (for compatibility with parse_timesheet_table output)
+            timesheet_data = {
+                'resource_name': complete_data.get('resource_name', ''),
+                'date_range': complete_data.get('date_range', ''),
+                'is_zero_hour_timesheet': complete_data.get('is_zero_hour_timesheet', False),
+                'zero_hour_reason': complete_data.get('zero_hour_reason'),
+                'daily_totals': complete_data.get('daily_totals', [0, 0, 0, 0, 0, 0, 0]),
+                'weekly_total': complete_data.get('weekly_total', 0),
+                'projects': corrected_projects  # Use corrected projects
+            }
+
+            # Empty usage stats (Gemini doesn't provide in same format)
+            usage_stats = {}
+
+            total_time = time.time() - operation_start
+            perf_metrics.record("gemini_complete_extraction", total_time, {
+                "model": gemini_response['model'],
+                "projects_extracted": len(timesheet_data['projects'])
+            })
+
+            log(f"✅ Complete extraction: {metadata['resource_name']} | {metadata['date_range']}")
+            log(f"✅ Extracted {len(timesheet_data['projects'])} projects in {total_time:.3f}s")
+
+            return metadata, timesheet_data, usage_stats, total_time
+
+    except Exception as e:
+        error_str = str(e)
+        log(f"❌ Gemini extraction error: {error_str}", "ERROR")
+        import traceback
+        log(f"Stack trace:\n{traceback.format_exc()}", "ERROR")
+        raise
 
 
 def extract_table_with_textract(bucket: str, key: str) -> Tuple[Dict, float]:
@@ -631,68 +747,92 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         except ImportError:
             log("Image metadata extraction skipped (Pillow not available)")
 
-        # Step 2: Extract metadata (name, dates, status) with Claude
-        log("\n" + "="*80)
-        log("STEP 2: Extract Metadata with Claude")
-        log("="*80)
+        # FEATURE FLAG: Use Gemini or Textract+Nova based on environment variable
+        if USE_GEMINI_OCR:
+            # NEW PATH: Google Gemini 2.0 Flash for complete extraction
+            log("\n" + "="*80)
+            log("STEP 2-4 (GEMINI): Complete Timesheet Extraction with Gemini 2.0 Flash")
+            log("="*80)
+            log(f"🚀 FEATURE FLAG ENABLED: Using Gemini OCR (USE_GEMINI_OCR=true)")
 
-        metadata, nova_usage, metadata_time = extract_metadata_with_claude(bucket, key, image_bytes)
-        resource_name = metadata['resource_name']
-        date_range = metadata['date_range']
-        status = metadata.get('status', 'Unknown').strip()
+            metadata, timesheet_data, nova_usage, extraction_time = extract_complete_timesheet_with_gemini(bucket, key, image_bytes)
+            resource_name = metadata['resource_name']
+            date_range = metadata['date_range']
+            status = metadata.get('status', 'Unknown').strip()
 
-        log(f"✅ Resource: {resource_name}")
-        log(f"✅ Date range: {date_range}")
-        log(f"✅ Status: {status}")
+            log(f"✅ Resource: {resource_name}")
+            log(f"✅ Date range: {date_range}")
+            log(f"✅ Status: {status}")
 
-        # Validate status is "Posted"
-        if status.lower() != 'posted':
-            log(f"❌ REJECTED: Status is '{status}', not 'Posted'", "WARN")
+            # For Gemini path, we skip Textract and parsing - data is already complete
+            textract_time = 0
+            parsing_time = 0
+            log(f"✅ Gemini extracted complete timesheet in {extraction_time:.3f}s (replaces Textract + Nova)")
 
-            # Store rejection record in DynamoDB
-            processing_time = time.time() - overall_start
+        else:
+            # OLD PATH: Textract + Amazon Nova Lite (current production)
+            log("\n" + "="*80)
+            log("STEP 2: Extract Metadata with Amazon Nova Lite")
+            log("="*80)
+            log(f"📋 FEATURE FLAG DISABLED: Using Textract + Nova (USE_GEMINI_OCR=false)")
 
-            with PerformanceTimer("Store Rejection in DynamoDB", log):
-                rejection_result = store_rejected_timesheet(
-                    resource_name=resource_name,
-                    date_range=date_range,
-                    status=status,
-                    image_key=key,
-                    processing_time=processing_time,
-                    reason=f"Status is '{status}' instead of 'Posted'",
-                    table_name=DYNAMODB_TABLE
-                )
+            metadata, nova_usage, metadata_time = extract_metadata_with_claude(bucket, key, image_bytes)
+            resource_name = metadata['resource_name']
+            date_range = metadata['date_range']
+            status = metadata.get('status', 'Unknown').strip()
 
-            log(f"Rejection stored with ID: {rejection_result.get('rejection_id', 'N/A')}")
-            perf_metrics.print_report()
+            log(f"✅ Resource: {resource_name}")
+            log(f"✅ Date range: {date_range}")
+            log(f"✅ Status: {status}")
 
-            return {
-                'statusCode': 200,
-                'body': json.dumps({
-                    'message': f'Timesheet rejected: Status is {status}, not Posted',
-                    'input_image': f"s3://{bucket}/{key}",
-                    'resource_name': resource_name,
-                    'date_range': date_range,
-                    'status': status,
-                    'rejected': True,
-                    'reason': f"Status is '{status}' instead of 'Posted'",
-                    'image_hash': image_hash
-                })
-            }
+            # Validate status is "Posted"
+            if status.lower() != 'posted':
+                log(f"❌ REJECTED: Status is '{status}', not 'Posted'", "WARN")
 
-        # Step 3: Extract table structure with Textract
-        log("\n" + "="*80)
-        log("STEP 3: Extract Table with Textract")
-        log("="*80)
+                # Store rejection record in DynamoDB
+                processing_time = time.time() - overall_start
 
-        textract_response, textract_time = extract_table_with_textract(bucket, key)
+                with PerformanceTimer("Store Rejection in DynamoDB", log):
+                    rejection_result = store_rejected_timesheet(
+                        resource_name=resource_name,
+                        date_range=date_range,
+                        status=status,
+                        image_key=key,
+                        processing_time=processing_time,
+                        reason=f"Status is '{status}' instead of 'Posted'",
+                        table_name=DYNAMODB_TABLE
+                    )
 
-        # Step 4: Parse table into timesheet data
-        log("\n" + "="*80)
-        log("STEP 4: Parse Table Data")
-        log("="*80)
+                log(f"Rejection stored with ID: {rejection_result.get('rejection_id', 'N/A')}")
+                perf_metrics.print_report()
 
-        timesheet_data, parsing_time = parse_timesheet_table(textract_response, resource_name, date_range)
+                return {
+                    'statusCode': 200,
+                    'body': json.dumps({
+                        'message': f'Timesheet rejected: Status is {status}, not Posted',
+                        'input_image': f"s3://{bucket}/{key}",
+                        'resource_name': resource_name,
+                        'date_range': date_range,
+                        'status': status,
+                        'rejected': True,
+                        'reason': f"Status is '{status}' instead of 'Posted'",
+                        'image_hash': image_hash
+                    })
+                }
+
+            # Step 3: Extract table structure with Textract
+            log("\n" + "="*80)
+            log("STEP 3: Extract Table with Textract")
+            log("="*80)
+
+            textract_response, textract_time = extract_table_with_textract(bucket, key)
+
+            # Step 4: Parse table into timesheet data
+            log("\n" + "="*80)
+            log("STEP 4: Parse Table Data")
+            log("="*80)
+
+            timesheet_data, parsing_time = parse_timesheet_table(textract_response, resource_name, date_range)
 
         # Step 4.5: Apply field validators for auto-correction
         log("\n" + "="*80)
@@ -736,6 +876,39 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             import traceback
             log(f"Stack trace:\n{traceback.format_exc()}", "DEBUG")
 
+        # Step 5.5: Fix column alignment and apply bank holiday validation
+        log("\n" + "="*80)
+        log("STEP 5.5: Column Alignment Correction & Bank Holiday Validation")
+        log("="*80)
+
+        try:
+            with PerformanceTimer("Column Alignment Fix", log):
+                # Show alignment diagnostics BEFORE correction
+                log("\n📊 Alignment Diagnostics (BEFORE correction):")
+                log(get_alignment_diagnostics(timesheet_data))
+
+                # Apply automatic column alignment correction
+                corrected_data, corrections = fix_column_alignment(timesheet_data)
+
+                if corrections:
+                    log("\n🔧 Column Alignment Corrections:")
+                    for correction in corrections:
+                        log(f"   {correction}")
+
+                    timesheet_data = corrected_data
+
+                    # Show alignment diagnostics AFTER correction
+                    log("\n📊 Alignment Diagnostics (AFTER correction):")
+                    log(get_alignment_diagnostics(timesheet_data))
+                else:
+                    log("✅ No column alignment corrections needed")
+
+                perf_metrics.record("column_alignment", 0.001, {})
+        except Exception as e:
+            log(f"⚠️  Column alignment correction failed (continuing): {e}", "WARN")
+            import traceback
+            log(f"Stack trace:\n{traceback.format_exc()}", "DEBUG")
+
         # Step 6: Validate extracted data
         log("\n" + "="*80)
         log("STEP 6: Validate Timesheet Data")
@@ -751,6 +924,35 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 "warnings_count": len(validation_result['warnings'])
             })
 
+        # Step 6.5: Auto-correct column misalignments if validation failed
+        if not validation_result['valid']:
+            log("\n" + "="*80)
+            log("STEP 6.5: Auto-Correction Attempt")
+            log("="*80)
+
+            with PerformanceTimer("Auto-Correction", log):
+                was_corrected, corrected_data, correction_message = enhanced_correct(timesheet_data)
+
+                if was_corrected:
+                    log(f"✓ {correction_message}")
+                    timesheet_data = corrected_data
+
+                    # Re-validate after correction
+                    validation_result = validate_timesheet_data(timesheet_data)
+                    log("\nRe-validation after auto-correction:")
+                    log(format_validation_report(validation_result))
+
+                    perf_metrics.record("auto_correction", 0.001, {
+                        "corrected": True,
+                        "valid_after": validation_result['valid']
+                    })
+                else:
+                    log(f"⚠️  {correction_message}")
+                    perf_metrics.record("auto_correction", 0.001, {
+                        "corrected": False,
+                        "valid_after": False
+                    })
+
         # Step 7: Calculate cost
         log("\n" + "="*80)
         log("STEP 7: Calculate Processing Cost")
@@ -758,16 +960,106 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
         textract_pages = 1
         textract_cost = textract_pages * 0.0015  # $0.0015 per page for table analysis
-        nova_cost = calculate_cost_estimate(
-            nova_usage['inputTokens'],
-            nova_usage['outputTokens'],
-            'us.amazon.nova-lite-v1:0'
-        )['total_cost_usd']
-        total_cost = textract_cost + nova_cost
 
-        log(f"💰 Textract cost: ${textract_cost:.6f}")
-        log(f"💰 Nova Lite cost: ${nova_cost:.6f}")
-        log(f"💰 Total cost: ${total_cost:.6f}")
+        if USE_GEMINI_OCR:
+            # Gemini cost calculation
+            gemini_cost = 0.0  # Free tier or add actual Gemini pricing if needed
+            total_cost = textract_cost + gemini_cost
+            log(f"💰 Textract cost: ${textract_cost:.6f}")
+            log(f"💰 Gemini cost: ${gemini_cost:.6f}")
+            log(f"💰 Total cost: ${total_cost:.6f}")
+        else:
+            # Nova cost calculation
+            nova_cost = calculate_cost_estimate(
+                nova_usage['inputTokens'],
+                nova_usage['outputTokens'],
+                'us.amazon.nova-lite-v1:0'
+            )['total_cost_usd']
+            total_cost = textract_cost + nova_cost
+            log(f"💰 Textract cost: ${textract_cost:.6f}")
+            log(f"💰 Nova Lite cost: ${nova_cost:.6f}")
+            log(f"💰 Total cost: ${total_cost:.6f}")
+
+        # Step 7.5: Check for and remove duplicate timesheets
+        log("\n" + "="*80)
+        log("STEP 7.5: Check for Duplicate Timesheets")
+        log("="*80)
+
+        resource_name = timesheet_data.get('resource_name', '').replace(' ', '_')
+        date_range = timesheet_data.get('date_range', '')
+
+        if resource_name and date_range:
+            # Parse week start date from date range
+            try:
+                week_start_str = date_range.split(' - ')[0].strip()
+                from datetime import datetime
+                week_start = datetime.strptime(week_start_str, "%b %d %Y")
+                week_start_date = week_start.strftime('%Y-%m-%d')
+
+                log(f"🔍 Checking for existing timesheet: {resource_name}, week {week_start_date}")
+
+                # Query for existing entries for this person/week
+                dynamodb = boto3.resource('dynamodb')
+                table = dynamodb.Table(DYNAMODB_TABLE)
+
+                # Check for entries in this week (Mon-Sun)
+                existing_entries = []
+                existing_images = set()
+
+                for day_offset in range(7):
+                    check_date = week_start + timedelta(days=day_offset)
+                    check_date_str = check_date.strftime('%Y-%m-%d')
+
+                    response = table.query(
+                        KeyConditionExpression='ResourceName = :rn AND begins_with(DateProjectCode, :date)',
+                        ExpressionAttributeValues={
+                            ':rn': resource_name,
+                            ':date': check_date_str
+                        }
+                    )
+
+                    items = response.get('Items', [])
+                    existing_entries.extend(items)
+
+                    for item in items:
+                        if 'SourceImage' in item and item['SourceImage'] != key:
+                            existing_images.add(item['SourceImage'])
+
+                if existing_entries:
+                    log(f"⚠️  Found {len(existing_entries)} existing entries for this person/week")
+                    log(f"📁 Old source images: {', '.join(existing_images)}")
+
+                    # Delete old entries
+                    log(f"🗑️  Deleting {len(existing_entries)} old entries from DynamoDB...")
+
+                    with table.batch_writer() as batch:
+                        for item in existing_entries:
+                            batch.delete_item(
+                                Key={
+                                    'ResourceName': item['ResourceName'],
+                                    'DateProjectCode': item['DateProjectCode']
+                                }
+                            )
+
+                    log(f"✅ Deleted {len(existing_entries)} old database entries")
+
+                    # Delete old S3 images
+                    s3_client = boto3.client('s3')
+                    for old_image in existing_images:
+                        try:
+                            log(f"🗑️  Deleting old S3 image: {old_image}")
+                            s3_client.delete_object(Bucket=bucket, Key=old_image)
+                            log(f"✅ Deleted S3 image: {old_image}")
+                        except Exception as e:
+                            log(f"⚠️  Could not delete S3 image {old_image}: {str(e)}")
+
+                    log(f"🔄 Replacing old timesheet with new higher-quality scan")
+                else:
+                    log(f"✅ No existing timesheet found - this is a new entry")
+
+            except Exception as e:
+                log(f"⚠️  Error checking for duplicates: {str(e)}")
+                log(f"⚠️  Continuing with storage anyway...")
 
         # Step 8: Store in DynamoDB
         log("\n" + "="*80)
@@ -779,13 +1071,23 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         with PerformanceTimer("DynamoDB Storage", log):
             db_start = time.time()
 
+            # Set model info based on which OCR path was used
+            if USE_GEMINI_OCR:
+                model_id = 'gemini-2.0-flash'
+                input_tokens = 0  # Gemini doesn't expose token counts
+                output_tokens = 0
+            else:
+                model_id = 'textract+nova-lite'
+                input_tokens = nova_usage['inputTokens']
+                output_tokens = nova_usage['outputTokens']
+
             db_result = store_timesheet_entries(
                 timesheet_data=timesheet_data,
                 image_key=key,
                 processing_time=processing_time,
-                model_id='textract+nova-lite',
-                input_tokens=nova_usage['inputTokens'],
-                output_tokens=nova_usage['outputTokens'],
+                model_id=model_id,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
                 cost_estimate=total_cost,
                 table_name=DYNAMODB_TABLE,
                 image_metadata=image_metadata  # Pass image metadata for analysis
@@ -824,6 +1126,18 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     'errors': validation_result['errors'],
                     'warnings': validation_result['warnings'],
                     'summary': validation_result['summary']
+                },
+                'ocr_extracted_values': {
+                    'daily_totals': timesheet_data.get('daily_totals', []),
+                    'weekly_total': timesheet_data.get('weekly_total', 0),
+                    'projects': [
+                        {
+                            'project_code': p.get('project_code', 'Unknown'),
+                            'project_name': p.get('project_name', 'Unknown'),
+                            'total_hours': sum(float(day.get('hours', '0')) for day in p.get('hours_by_day', []))
+                        }
+                        for p in timesheet_data.get('projects', [])
+                    ]
                 },
                 'performance_metrics': perf_metrics.get_summary()
             })

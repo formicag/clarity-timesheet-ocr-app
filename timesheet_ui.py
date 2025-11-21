@@ -3057,6 +3057,10 @@ class TimesheetOCRApp:
             ttk.Button(button_frame, text="⏹ Stop Scan", command=on_stop,
                       width=15).pack(side=tk.LEFT, padx=5)
 
+            # macOS fix: force rendering
+            dialog.update_idletasks()
+            dialog.update()
+
             # Wait for dialog to close
             print(f"[DEBUG] _show_approval_dialog_blocking: Calling wait_window()...")
             dialog.wait_window()
@@ -3276,6 +3280,10 @@ class TimesheetOCRApp:
 
             ttk.Button(button_frame, text="⏹ Stop Scan", command=on_stop,
                       width=15).pack(side=tk.LEFT, padx=5)
+
+            # macOS fix: force rendering
+            dialog.update_idletasks()
+            dialog.update()
 
             # Wait for dialog to close
             dialog.wait_window()

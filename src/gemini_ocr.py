@@ -31,13 +31,36 @@ def extract_metadata_with_gemini(image_data: bytes, prompt: str) -> Dict[str, An
     genai.configure(api_key=api_key)
 
     # Use Gemini 2.0 Flash (fastest model)
-    model = genai.GenerativeModel('gemini-2.0-flash-exp')
+    # Configure for deterministic, accurate OCR with no hallucination
+    generation_config = {
+        'temperature': 0.0,  # Deterministic output - no creativity/hallucination
+        'top_p': 0.95,
+        'top_k': 40,
+        'max_output_tokens': 8192,
+    }
+
+    model = genai.GenerativeModel(
+        'gemini-2.0-flash-exp',
+        generation_config=generation_config
+    )
 
     # Load image
     image = Image.open(io.BytesIO(image_data))
 
+    # Generate response with explicit instruction to only read THIS image
+    enhanced_prompt = f"""{prompt}
+
+**CRITICAL - READ ONLY THIS IMAGE**:
+- Extract data ONLY from the image provided in this request
+- Do NOT use any cached data from previous images
+- Do NOT mix data from other timesheets
+- If you cannot read something clearly, indicate uncertainty - do NOT guess
+- Every project code must be visibly present in THIS image
+- The date range must match what is shown at the top of THIS image
+"""
+
     # Generate response
-    response = model.generate_content([prompt, image])
+    response = model.generate_content([enhanced_prompt, image])
 
     # Parse JSON response
     response_text = response.text.strip()

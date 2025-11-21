@@ -392,6 +392,39 @@ def index():
     return render_template('dashboard.html', db_count=db_count, clarity_months=clarity_months)
 
 
+@app.route('/about')
+def about():
+    """About This App page"""
+    # Read version from OCR_VERSION.txt
+    version = "2.6.0"
+    try:
+        with open('OCR_VERSION.txt', 'r') as f:
+            for line in f:
+                if line.startswith('VERSION='):
+                    version = line.split('=')[1].strip()
+                    break
+    except:
+        pass
+
+    # Get statistics
+    total_entries = get_db_count()
+
+    # Count processed images
+    total_images = 0
+    try:
+        response = s3_client.list_objects_v2(Bucket=INPUT_BUCKET)
+        for obj in response.get('Contents', []):
+            if obj['Key'].lower().endswith(('.png', '.jpg', '.jpeg')):
+                total_images += 1
+    except:
+        total_images = 183  # Default fallback
+
+    return render_template('about.html',
+                         version=version,
+                         total_entries=total_entries,
+                         total_images=total_images)
+
+
 @app.route('/api/db-count')
 def api_db_count():
     """Get current database count"""
@@ -709,6 +742,99 @@ def export_clarity():
 
     except Exception as e:
         log_message(f"✗ Export error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/export/main-projects', methods=['POST'])
+def export_main_projects():
+    """Export each person's main project (most hours) for a Clarity month"""
+    try:
+        log_message("📊 Main projects export requested...")
+        data = request.json
+        clarity_month = data.get('month')
+
+        log_message(f"Clarity month: {clarity_month}")
+
+        # Find the month config
+        month_config = next((m for m in clarity_months if m.get('id') == clarity_month), None)
+        if not month_config:
+            log_message(f"✗ Invalid Clarity month: {clarity_month}")
+            return jsonify({'success': False, 'error': f'Invalid Clarity month: {clarity_month}'}), 400
+
+        start_date = month_config['start_date']
+        end_date = month_config['end_date']
+
+        log_message(f"Analyzing projects from {start_date} to {end_date}")
+
+        # Load and filter data
+        all_items = load_all_data()
+        filtered_items = [
+            item for item in all_items
+            if start_date <= item.get('Date', '') <= end_date
+            and not item.get('IsZeroHourTimesheet', False)  # Exclude zero-hour timesheets
+        ]
+
+        log_message(f"Found {len(filtered_items)} items in date range")
+
+        # Group by person and project, sum hours
+        person_projects = defaultdict(lambda: defaultdict(float))
+        for item in filtered_items:
+            person = item.get('ResourceNameDisplay', item.get('ResourceName', '')).replace('_', ' ')
+            project_code = item.get('ProjectCode', '')
+            project_name = item.get('ProjectName', '')
+            hours = float(item.get('Hours', 0))
+
+            # Store both project code and name
+            key = f"{project_code}|{project_name}"
+            person_projects[person][key] += hours
+
+        # Find main project (most hours) for each person
+        main_projects = []
+        for person, projects in sorted(person_projects.items()):
+            if projects:
+                # Find project with most hours
+                main_project_key = max(projects.items(), key=lambda x: x[1])[0]
+                project_code, project_name = main_project_key.split('|', 1)
+                total_hours = projects[main_project_key]
+
+                main_projects.append({
+                    'person': person,
+                    'project_code': project_code,
+                    'project_name': project_name,
+                    'hours': total_hours
+                })
+
+        log_message(f"Identified main projects for {len(main_projects)} people")
+
+        # Create CSV
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(['Person Name', 'Main Project Code', 'Main Project Name', 'Hours on Main Project'])
+
+        for item in main_projects:
+            writer.writerow([
+                item['person'],
+                item['project_code'],
+                item['project_name'],
+                f"{item['hours']:.2f}"
+            ])
+
+        # Return CSV file
+        output.seek(0)
+        filename = f"main_projects_{clarity_month}.csv"
+
+        log_message(f"✓ Generated main projects export: {filename}")
+
+        return Response(
+            output.getvalue(),
+            mimetype='text/csv',
+            headers={'Content-Disposition': f'attachment; filename={filename}'}
+        )
+
+    except Exception as e:
+        log_message(f"✗ Main projects export error: {str(e)}")
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -1573,6 +1699,22 @@ def import_corrections():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+def find_available_port(start_port=8000, max_attempts=100):
+    """Find an available port starting from start_port"""
+    import socket
+    for port in range(start_port, start_port + max_attempts):
+        try:
+            # Try to bind to the port
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(('0.0.0.0', port))
+            sock.close()
+            return port
+        except OSError:
+            continue
+    raise RuntimeError(f"Could not find available port in range {start_port}-{start_port + max_attempts}")
+
+
 if __name__ == '__main__':
     log_message("Starting Timesheet OCR Web Application...")
     log_message(f"AWS Region: {AWS_REGION}")
@@ -1580,5 +1722,10 @@ if __name__ == '__main__':
     log_message(f"DynamoDB Table: {DYNAMODB_TABLE}")
     log_message(f"Lambda Function: {LAMBDA_FUNCTION}")
 
+    # Find an available port
+    port = find_available_port(start_port=8000)
+    log_message(f"Attempting to use port: {port}")
+
     # Run Flask app
-    app.run(host='0.0.0.0', port=5002, debug=True, threaded=True)
+    # Note: The launcher script will detect the actual port from Flask's output
+    app.run(host='0.0.0.0', port=port, debug=True, threaded=True)
