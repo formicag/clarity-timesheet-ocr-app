@@ -1,0 +1,1278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Timesheet OCR - Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        /* Header */
+        .header {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header h1 {
+            font-size: 32px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .db-counter {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 30px;
+            border-radius: 10px;
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .db-counter-value {
+            font-size: 28px;
+            font-weight: bold;
+        }
+
+        /* Navigation Tabs */
+        .nav-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+
+        .nav-tab {
+            background: white;
+            padding: 15px 30px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+
+        .nav-tab:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+        }
+
+        .nav-tab.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        /* Tab Content */
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        /* Card Styles */
+        .card {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+
+        .card-title {
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 20px;
+            color: #764ba2;
+        }
+
+        /* Grid Layouts */
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+        }
+
+        .grid-3 {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 20px;
+        }
+
+        /* Buttons */
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-success {
+            background: #10b981;
+            color: white;
+        }
+
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+        }
+
+        .btn-warning {
+            background: #f59e0b;
+            color: white;
+        }
+
+        .btn-info {
+            background: #3b82f6;
+            color: white;
+        }
+
+        .btn-block {
+            width: 100%;
+            margin-bottom: 10px;
+        }
+
+        /* File Upload */
+        .upload-area {
+            border: 3px dashed #d1d5db;
+            border-radius: 15px;
+            padding: 60px 30px;
+            text-align: center;
+            background: #f9fafb;
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+
+        .upload-area:hover {
+            border-color: #667eea;
+            background: #f3f4f6;
+        }
+
+        .upload-area.dragover {
+            border-color: #764ba2;
+            background: #ede9fe;
+        }
+
+        /* Data Table */
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        .data-table th {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+        }
+
+        .data-table td {
+            padding: 12px 15px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .data-table tr:hover {
+            background: #f9fafb;
+        }
+
+        /* Logs Terminal */
+        .logs-terminal {
+            background: #1e293b;
+            color: #10b981;
+            font-family: 'Courier New', monospace;
+            padding: 20px;
+            border-radius: 10px;
+            height: 500px;
+            overflow-y: auto;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .log-entry {
+            margin-bottom: 5px;
+        }
+
+        /* Form Elements */
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #374151;
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #d1d5db;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        .form-control:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        select.form-control {
+            cursor: pointer;
+        }
+
+        /* Statistics Cards */
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 25px;
+            border-radius: 12px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 42px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        /* Loading Spinner */
+        .spinner {
+            border: 4px solid #f3f4f6;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Messages */
+        .message {
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-weight: 500;
+        }
+
+        .message.success {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .message.error {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .message.info {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .grid-2 {
+                grid-template-columns: 1fr;
+            }
+
+            .grid-3 {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Badge */
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .badge-success {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .badge-warning {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .badge-danger {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .badge-info {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <div>
+                <h1>📊 Timesheet OCR Manager</h1>
+                <div class="badge badge-success" style="margin-top: 10px;">
+                    ✓ 2025 UK Bank Holidays Enabled
+                </div>
+            </div>
+            <div class="db-counter">
+                <div>
+                    <div style="font-size: 12px; opacity: 0.8;">Database Entries</div>
+                    <div class="db-counter-value" id="dbCounter">{{ db_count }}</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Navigation -->
+        <div class="nav-tabs">
+            <div class="nav-tab active" onclick="showTab('upload')">📤 Upload</div>
+            <div class="nav-tab" onclick="showTab('approval')">✅ Approval Queue</div>
+            <div class="nav-tab" onclick="showTab('database')">💾 Database View</div>
+            <div class="nav-tab" onclick="showTab('export')">📊 Export Data</div>
+            <div class="nav-tab" onclick="showTab('quality')">🔍 Data Quality</div>
+            <div class="nav-tab" onclick="showTab('bulk')">⚙️ Bulk Operations</div>
+            <div class="nav-tab" onclick="showTab('team')">👥 Team Management</div>
+            <div class="nav-tab" onclick="showTab('logs')">📋 Logs</div>
+            <div class="nav-tab" onclick="window.location.href='/about'">ℹ️ About</div>
+        </div>
+
+        <!-- Tab: Upload -->
+        <div id="tab-upload" class="tab-content active">
+            <div class="card">
+                <h2 class="card-title">Upload Timesheet Images</h2>
+                <p style="color: #6b7280; margin-bottom: 20px;">
+                    📌 <strong>Upload Only Mode:</strong> Images will be uploaded to S3 but NOT automatically processed.
+                    Use the <strong>Approval Queue</strong> tab to review and approve each timesheet for database import.
+                </p>
+                <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
+                    <div style="font-size: 48px; margin-bottom: 20px;">📁</div>
+                    <h3 style="margin-bottom: 10px;">Drop files here or click to browse</h3>
+                    <p style="color: #6b7280;">Supports PNG, JPG, JPEG (max 50MB per file)</p>
+                    <input type="file" id="fileInput" multiple accept=".png,.jpg,.jpeg" style="display: none;">
+                </div>
+                <div id="fileList" style="margin-top: 20px;"></div>
+                <button class="btn btn-primary btn-block" style="margin-top: 20px;" onclick="uploadFiles()" id="uploadBtn" disabled>
+                    Upload Files to S3
+                </button>
+            </div>
+        </div>
+
+        <!-- Tab: Database View -->
+        <div id="tab-database" class="tab-content">
+            <div class="card">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <h2 class="card-title" style="margin: 0;">Database Entries</h2>
+                    <button class="btn btn-info" onclick="loadDatabaseData()">🔄 Refresh</button>
+                </div>
+                <div style="overflow-x: auto;">
+                    <table class="data-table" id="dataTable">
+                        <thead>
+                            <tr>
+                                <th>Resource Name</th>
+                                <th>Date</th>
+                                <th>Project Name</th>
+                                <th>Project Code</th>
+                                <th>Hours</th>
+                                <th>Source Image</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dataTableBody">
+                            <tr><td colspan="7" style="text-align: center; padding: 40px;">
+                                <div class="spinner"></div>
+                                Loading data...
+                            </td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: Export Data -->
+        <div id="tab-export" class="tab-content">
+            <div class="grid-2">
+                <!-- Period Export -->
+                <div class="card">
+                    <h2 class="card-title">Export by Date Range</h2>
+                    <div class="form-group">
+                        <label class="form-label">Start Date</label>
+                        <input type="date" class="form-control" id="exportStartDate">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">End Date</label>
+                        <input type="date" class="form-control" id="exportEndDate">
+                    </div>
+                    <button class="btn btn-success btn-block" onclick="exportPeriod('summary')">
+                        📊 Export Summary
+                    </button>
+                    <button class="btn btn-info btn-block" onclick="exportPeriod('detailed')">
+                        📋 Export Detailed
+                    </button>
+                </div>
+
+                <!-- Clarity Export -->
+                <div class="card">
+                    <h2 class="card-title">Export by Clarity Month</h2>
+                    <div class="form-group">
+                        <label class="form-label">Clarity Billing Period</label>
+                        <select class="form-control" id="clarityMonth">
+                            {% for month in clarity_months %}
+                            <option value="{{ month.id }}">{{ month.display_name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <button class="btn btn-success btn-block" onclick="exportClarity('summary')">
+                        📊 Export Summary
+                    </button>
+                    <button class="btn btn-info btn-block" onclick="exportClarity('detailed')">
+                        📋 Export Detailed
+                    </button>
+                    <button class="btn btn-warning btn-block" onclick="generateCoverage()">
+                        🔍 Coverage Report
+                    </button>
+                    <button class="btn btn-success btn-block" onclick="generateLabourHours()">
+                        ⏱️ Labour Hours Report
+                    </button>
+                    <button class="btn btn-secondary btn-block" onclick="exportMainProjects()">
+                        👥 People's Main Projects
+                    </button>
+                </div>
+            </div>
+
+            <!-- Full Database Export -->
+            <div class="card">
+                <h2 class="card-title">Full Database Export</h2>
+                <button class="btn btn-primary btn-block" onclick="exportFull()">
+                    💾 Export Complete Database
+                </button>
+            </div>
+
+            <!-- Import Corrections -->
+            <div class="card">
+                <h2 class="card-title">Import Corrections</h2>
+                <p style="margin-bottom: 15px; color: #6b7280;">
+                    Upload a CSV file with corrections. Only changed values will be updated.
+                </p>
+                <input type="file" id="correctionsFile" accept=".csv" class="form-control" style="margin-bottom: 15px;">
+                <button class="btn btn-warning btn-block" onclick="importCorrections()">
+                    📥 Import Corrections
+                </button>
+            </div>
+        </div>
+
+        <!-- Tab: Data Quality -->
+        <div id="tab-quality" class="tab-content">
+            <div class="grid-2">
+                <div class="card">
+                    <h2 class="card-title">Reference Dictionaries</h2>
+                    <p style="margin-bottom: 20px; color: #6b7280;">
+                        Update project codes and person names dictionaries for better OCR validation.
+                    </p>
+                    <button class="btn btn-primary btn-block" onclick="updateDictionaries()">
+                        🔄 Update Dictionaries
+                    </button>
+                </div>
+
+                <div class="card">
+                    <h2 class="card-title">Similar Project Codes</h2>
+                    <p style="margin-bottom: 20px; color: #6b7280;">
+                        Find potentially incorrect project codes (OCR errors).
+                    </p>
+                    <button class="btn btn-warning btn-block" onclick="findSimilarCodes()">
+                        🔍 Find Similar Codes
+                    </button>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2 class="card-title">S3 Bucket Images</h2>
+                <button class="btn btn-info btn-block" onclick="listS3Images()">
+                    📁 List Images in S3
+                </button>
+                <div id="s3ImagesList" style="margin-top: 20px;"></div>
+            </div>
+        </div>
+
+        <!-- Tab: Bulk Operations -->
+        <div id="tab-bulk" class="tab-content">
+            <div class="card">
+                <h2 class="card-title">⚠️ Danger Zone</h2>
+                <p style="margin-bottom: 20px; color: #ef4444; font-weight: 600;">
+                    These operations cannot be undone. Use with extreme caution.
+                </p>
+                <button class="btn btn-danger btn-block" onclick="flushDatabase()">
+                    🗑️ Flush Entire Database
+                </button>
+            </div>
+        </div>
+
+        <!-- Tab: Team Management -->
+        <div id="tab-team" class="tab-content">
+            <div class="grid-2">
+                <!-- Team Members -->
+                <div class="card">
+                    <h2 class="card-title">Team Roster</h2>
+                    <div id="teamMembersList" style="max-height: 400px; overflow-y: auto; margin-bottom: 15px;">
+                        <div class="spinner"></div>
+                    </div>
+                    <div class="form-group">
+                        <input type="text" class="form-control" id="newMemberName" placeholder="New member name">
+                    </div>
+                    <button class="btn btn-success btn-block" onclick="addTeamMember()">
+                        ➕ Add Team Member
+                    </button>
+                </div>
+
+                <!-- Name Aliases -->
+                <div class="card">
+                    <h2 class="card-title">Name Aliases</h2>
+                    <p style="margin-bottom: 15px; color: #6b7280; font-size: 14px;">
+                        Map OCR errors to correct names
+                    </p>
+                    <div id="aliasesList" style="max-height: 400px; overflow-y: auto; margin-bottom: 15px;">
+                        <div class="spinner"></div>
+                    </div>
+                    <div class="form-group">
+                        <input type="text" class="form-control" id="ocrVariant" placeholder="OCR variant (incorrect)">
+                    </div>
+                    <div class="form-group">
+                        <select class="form-control" id="canonicalName">
+                            <option value="">Select canonical name...</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-success btn-block" onclick="addAlias()">
+                        ➕ Add Alias
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: Approval Queue -->
+        <div id="tab-approval" class="tab-content">
+            <div class="card">
+                <h2 class="card-title">Image Approval Queue</h2>
+                <p style="margin-bottom: 20px; color: #6b7280;">
+                    Review and approve pending timesheet images.
+                </p>
+                <iframe src="/approval" style="width: 100%; height: 800px; border: none; border-radius: 10px;">
+                </iframe>
+            </div>
+        </div>
+
+        <!-- Tab: Logs -->
+        <div id="tab-logs" class="tab-content">
+            <div class="card">
+                <h2 class="card-title">Activity Logs</h2>
+                <div class="logs-terminal" id="logsTerminal">
+                    <div class="log-entry">[Starting] Waiting for events...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global state
+        let selectedFiles = [];
+        let logLines = [];
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            setupFileUpload();
+            startLogStream();
+            startDBCounter();
+            loadDatabaseData();
+            loadTeamData();
+        });
+
+        // Tab Navigation
+        function showTab(tabName) {
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelectorAll('.nav-tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+
+            // Show selected tab
+            document.getElementById('tab-' + tabName).classList.add('active');
+            event.target.classList.add('active');
+        }
+
+        // DB Counter
+        function startDBCounter() {
+            setInterval(async () => {
+                try {
+                    const response = await fetch('/api/db-count');
+                    const data = await response.json();
+                    document.getElementById('dbCounter').textContent = data.count;
+                } catch (error) {
+                    console.error('Error updating counter:', error);
+                }
+            }, 10000); // Every 10 seconds
+        }
+
+        // Log Streaming
+        function startLogStream() {
+            const eventSource = new EventSource('/api/logs');
+            const terminal = document.getElementById('logsTerminal');
+
+            eventSource.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                logLines.push(data.message);
+
+                // Keep last 1000 lines
+                if (logLines.length > 1000) {
+                    logLines.shift();
+                }
+
+                terminal.innerHTML = logLines.map(line =>
+                    `<div class="log-entry">${escapeHtml(line)}</div>`
+                ).join('');
+
+                // Auto-scroll
+                terminal.scrollTop = terminal.scrollHeight;
+            };
+        }
+
+        // File Upload
+        function setupFileUpload() {
+            const uploadArea = document.getElementById('uploadArea');
+            const fileInput = document.getElementById('fileInput');
+
+            uploadArea.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                uploadArea.classList.add('dragover');
+            });
+
+            uploadArea.addEventListener('dragleave', () => {
+                uploadArea.classList.remove('dragover');
+            });
+
+            uploadArea.addEventListener('drop', (e) => {
+                e.preventDefault();
+                uploadArea.classList.remove('dragover');
+                const files = Array.from(e.dataTransfer.files);
+                handleFiles(files);
+            });
+
+            fileInput.addEventListener('change', (e) => {
+                const files = Array.from(e.target.files);
+                handleFiles(files);
+            });
+        }
+
+        function handleFiles(files) {
+            selectedFiles = files.filter(f =>
+                f.name.toLowerCase().match(/\.(png|jpg|jpeg)$/)
+            );
+
+            const fileList = document.getElementById('fileList');
+            const uploadBtn = document.getElementById('uploadBtn');
+
+            if (selectedFiles.length > 0) {
+                fileList.innerHTML = `
+                    <div style="background: #f9fafb; padding: 15px; border-radius: 8px;">
+                        <strong>${selectedFiles.length} file(s) selected:</strong>
+                        <ul style="margin-top: 10px; padding-left: 20px;">
+                            ${selectedFiles.map(f => `<li>${f.name} (${(f.size / 1024).toFixed(1)} KB)</li>`).join('')}
+                        </ul>
+                    </div>
+                `;
+                uploadBtn.disabled = false;
+            } else {
+                fileList.innerHTML = '';
+                uploadBtn.disabled = true;
+            }
+        }
+
+        async function uploadFiles() {
+            if (selectedFiles.length === 0) return;
+
+            const formData = new FormData();
+            selectedFiles.forEach(file => {
+                formData.append('files', file);
+            });
+
+            const uploadBtn = document.getElementById('uploadBtn');
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = 'Uploading to S3...';
+
+            try {
+                const response = await fetch('/api/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showMessage('success', `✓ ${result.message || 'Uploaded ' + result.results.length + ' files to S3. Use Approval Queue to process them.'}`);
+                    selectedFiles = [];
+                    document.getElementById('fileList').innerHTML = '';
+                    document.getElementById('fileInput').value = '';
+                } else {
+                    showMessage('error', `Error: ${result.error}`);
+                }
+            } catch (error) {
+                showMessage('error', `Upload failed: ${error.message}`);
+            } finally {
+                uploadBtn.disabled = false;
+                uploadBtn.textContent = 'Upload Files to S3';
+            }
+        }
+
+        // Database View
+        async function loadDatabaseData() {
+            const tbody = document.getElementById('dataTableBody');
+            tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 40px;"><div class="spinner"></div>Loading data...</td></tr>';
+
+            try {
+                const response = await fetch('/api/data');
+                const result = await response.json();
+
+                if (!result.success) {
+                    tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; padding: 40px; color: #ef4444;">Error loading data: ${result.error}</td></tr>`;
+                    return;
+                }
+
+                if (result.data.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 40px; color: #6b7280;">No data available</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = result.data.map(item => `
+                    <tr>
+                        <td>${escapeHtml(item.ResourceNameDisplay || item.ResourceName)}</td>
+                        <td>${escapeHtml(item.Date)}</td>
+                        <td>${escapeHtml(item.ProjectName || '')}</td>
+                        <td>${escapeHtml(item.ProjectCode)}</td>
+                        <td>${item.Hours}</td>
+                        <td>${escapeHtml(item.SourceImage || 'N/A')}</td>
+                        <td>
+                            <button class="btn btn-danger" style="padding: 6px 12px; font-size: 12px;"
+                                    onclick="deleteByImage('${escapeHtml(item.SourceImage)}')">
+                                Delete
+                            </button>
+                        </td>
+                    </tr>
+                `).join('');
+
+            } catch (error) {
+                tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; padding: 40px; color: #ef4444;">Error loading data: ${error.message}</td></tr>`;
+            }
+        }
+
+        async function deleteByImage(sourceImage) {
+            if (!confirm(`Delete all entries from "${sourceImage}"?`)) return;
+
+            try {
+                const response = await fetch('/api/data/delete-by-image', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({source_image: sourceImage})
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showMessage('success', `✓ Deleted ${result.deleted} entries`);
+                    loadDatabaseData();
+                } else {
+                    showMessage('error', `Error: ${result.error}`);
+                }
+            } catch (error) {
+                showMessage('error', `Delete failed: ${error.message}`);
+            }
+        }
+
+        // Export Functions
+        async function exportPeriod(type) {
+            const startDate = document.getElementById('exportStartDate').value;
+            const endDate = document.getElementById('exportEndDate').value;
+
+            if (!startDate || !endDate) {
+                alert('Please select both start and end dates');
+                return;
+            }
+
+            const response = await fetch('/api/export/period', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({start_date: startDate, end_date: endDate, type: type})
+            });
+
+            const blob = await response.blob();
+            downloadFile(blob, `export_${type}_${startDate}_${endDate}.csv`);
+        }
+
+        async function exportClarity(type) {
+            const month = document.getElementById('clarityMonth').value;
+
+            const response = await fetch('/api/export/clarity', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({month: month, type: type})
+            });
+
+            const blob = await response.blob();
+            downloadFile(blob, `clarity_export_${type}_${month}.csv`);
+        }
+
+        async function exportMainProjects() {
+            const month = document.getElementById('clarityMonth').value;
+
+            if (!month) {
+                alert('Please select a Clarity billing period first');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/export/main-projects', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({month: month})
+                });
+
+                if (response.ok) {
+                    const blob = await response.blob();
+                    downloadFile(blob, `main_projects_${month}.csv`);
+                } else {
+                    alert('Error exporting main projects: ' + await response.text());
+                }
+            } catch (error) {
+                alert('Error exporting main projects: ' + error);
+            }
+        }
+
+        async function exportFull() {
+            window.location.href = '/api/export/full';
+        }
+
+        async function generateCoverage() {
+            const month = document.getElementById('clarityMonth').value;
+
+            if (!month) {
+                alert('Please select a Clarity billing period first');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/coverage', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({month: month})
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    // Download the HTML report
+                    const blob = new Blob([result.html], {type: 'text/html'});
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `coverage_report_${month}.html`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(url);
+                    showMessage('success', '✓ Coverage report downloaded!');
+                } else {
+                    showMessage('error', `Error: ${result.error}`);
+                }
+            } catch (error) {
+                console.error('Coverage error:', error);
+                showMessage('error', `Failed: ${error.message}`);
+            }
+        }
+
+        async function generateLabourHours() {
+            const month = document.getElementById('clarityMonth').value;
+
+            if (!month) {
+                alert('Please select a Clarity billing period first');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/labour-hours', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({month: month})
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    // Download the HTML report
+                    const blob = new Blob([result.html], {type: 'text/html'});
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `labour_hours_report_${month}.html`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(url);
+                    showMessage('success', '✓ Labour hours report downloaded!');
+                } else {
+                    showMessage('error', `Error: ${result.error}`);
+                }
+            } catch (error) {
+                console.error('Labour hours error:', error);
+                showMessage('error', `Failed: ${error.message}`);
+            }
+        }
+
+        async function importCorrections() {
+            const fileInput = document.getElementById('correctionsFile');
+            if (!fileInput.files.length) {
+                alert('Please select a CSV file');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            try {
+                const response = await fetch('/api/import-corrections', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showMessage('success', `✓ Updated ${result.updated} rows`);
+                    if (result.errors.length > 0) {
+                        console.error('Import errors:', result.errors);
+                    }
+                    loadDatabaseData();
+                } else {
+                    showMessage('error', `Error: ${result.error}`);
+                }
+            } catch (error) {
+                showMessage('error', `Import failed: ${error.message}`);
+            }
+        }
+
+        // Bulk Operations
+        async function flushDatabase() {
+            if (!confirm('⚠️ DELETE ALL DATABASE ENTRIES?\n\nThis cannot be undone!')) return;
+            if (!confirm('⚠️ FINAL WARNING!\n\nAre you absolutely sure?')) return;
+
+            try {
+                const response = await fetch('/api/flush-db', {
+                    method: 'POST'
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showMessage('success', `✓ Deleted ${result.deleted} entries`);
+                    loadDatabaseData();
+                } else {
+                    showMessage('error', `Error: ${result.error}`);
+                }
+            } catch (error) {
+                showMessage('error', `Flush failed: ${error.message}`);
+            }
+        }
+
+        // Data Quality
+        async function updateDictionaries() {
+            try {
+                const response = await fetch('/api/quality/update-dictionaries', {
+                    method: 'POST'
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showMessage('success', '✓ Dictionaries updated');
+                } else {
+                    showMessage('error', `Error: ${result.error}`);
+                }
+            } catch (error) {
+                showMessage('error', `Update failed: ${error.message}`);
+            }
+        }
+
+        async function findSimilarCodes() {
+            // Placeholder
+            showMessage('info', 'Finding similar codes...');
+        }
+
+        async function listS3Images() {
+            const container = document.getElementById('s3ImagesList');
+            container.innerHTML = '<div class="spinner"></div>';
+
+            try {
+                const response = await fetch('/api/s3-images');
+                const result = await response.json();
+
+                if (result.success) {
+                    container.innerHTML = `
+                        <p><strong>${result.total} images found</strong></p>
+                        <ul style="max-height: 400px; overflow-y: auto; padding-left: 20px;">
+                            ${result.images.map(img => `
+                                <li>${img.key} - ${(img.size / 1024).toFixed(1)} KB</li>
+                            `).join('')}
+                        </ul>
+                    `;
+                } else {
+                    container.innerHTML = `<p style="color: #ef4444;">Error: ${result.error}</p>`;
+                }
+            } catch (error) {
+                container.innerHTML = `<p style="color: #ef4444;">Failed: ${error.message}</p>`;
+            }
+        }
+
+        // Team Management
+        async function loadTeamData() {
+            // Load team members
+            try {
+                const response = await fetch('/api/team/members');
+                const result = await response.json();
+
+                const container = document.getElementById('teamMembersList');
+
+                if (!result.success) {
+                    container.innerHTML = `<p style="text-align: center; color: #ef4444; padding: 20px;">Error: ${result.error}</p>`;
+                } else {
+                    container.innerHTML = result.members.map(member => `
+                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid #e5e7eb;">
+                        <span>${escapeHtml(member)}</span>
+                        <button class="btn btn-danger" style="padding: 4px 12px; font-size: 12px;" onclick="removeTeamMember('${escapeHtml(member)}')">Remove</button>
+                    </div>
+                `).join('');
+
+                    // Update canonical name dropdown
+                    const select = document.getElementById('canonicalName');
+                    select.innerHTML = '<option value="">Select canonical name...</option>' +
+                        result.members.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
+                }
+
+            } catch (error) {
+                console.error('Error loading team:', error);
+            }
+
+            // Load aliases
+            try {
+                const response = await fetch('/api/team/aliases');
+                const result = await response.json();
+
+                const container = document.getElementById('aliasesList');
+
+                if (!result.success) {
+                    container.innerHTML = `<p style="text-align: center; color: #ef4444; padding: 20px;">Error: ${result.error}</p>`;
+                    return;
+                }
+
+                const aliases = Object.entries(result.aliases);
+
+                if (aliases.length === 0) {
+                    container.innerHTML = '<p style="text-align: center; color: #6b7280; padding: 20px;">No aliases defined</p>';
+                } else {
+                    container.innerHTML = aliases.map(([variant, canonical]) => `
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid #e5e7eb;">
+                            <span><strong>${escapeHtml(variant)}</strong> → ${escapeHtml(canonical)}</span>
+                            <button class="btn btn-danger" style="padding: 4px 12px; font-size: 12px;" onclick="removeAlias('${escapeHtml(variant)}')">Remove</button>
+                        </div>
+                    `).join('');
+                }
+
+            } catch (error) {
+                console.error('Error loading aliases:', error);
+            }
+        }
+
+        async function addTeamMember() {
+            const name = document.getElementById('newMemberName').value.trim();
+            if (!name) {
+                alert('Please enter a name');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/team/members', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({name: name})
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showMessage('success', `✓ Added team member: ${name}`);
+                    document.getElementById('newMemberName').value = '';
+                    loadTeamData();
+                } else {
+                    showMessage('error', `Error: ${result.error}`);
+                }
+            } catch (error) {
+                showMessage('error', `Failed: ${error.message}`);
+            }
+        }
+
+        async function removeTeamMember(name) {
+            if (!confirm(`Remove ${name} from team roster?`)) return;
+
+            try {
+                const response = await fetch(`/api/team/members/${encodeURIComponent(name)}`, {
+                    method: 'DELETE'
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showMessage('success', `✓ Removed: ${name}`);
+                    loadTeamData();
+                } else {
+                    showMessage('error', `Error: ${result.error}`);
+                }
+            } catch (error) {
+                showMessage('error', `Failed: ${error.message}`);
+            }
+        }
+
+        async function addAlias() {
+            const ocrVariant = document.getElementById('ocrVariant').value.trim();
+            const canonicalName = document.getElementById('canonicalName').value;
+
+            if (!ocrVariant || !canonicalName) {
+                alert('Please fill in both fields');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/team/aliases', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ocr_variant: ocrVariant, canonical_name: canonicalName})
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showMessage('success', `✓ Added alias: ${ocrVariant} → ${canonicalName}`);
+                    document.getElementById('ocrVariant').value = '';
+                    document.getElementById('canonicalName').value = '';
+                    loadTeamData();
+                } else {
+                    showMessage('error', `Error: ${result.error}`);
+                }
+            } catch (error) {
+                showMessage('error', `Failed: ${error.message}`);
+            }
+        }
+
+        async function removeAlias(variant) {
+            if (!confirm(`Remove alias "${variant}"?`)) return;
+
+            try {
+                const response = await fetch(`/api/team/aliases/${encodeURIComponent(variant)}`, {
+                    method: 'DELETE'
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showMessage('success', `✓ Removed alias: ${variant}`);
+                    loadTeamData();
+                } else {
+                    showMessage('error', `Error: ${result.error}`);
+                }
+            } catch (error) {
+                showMessage('error', `Failed: ${error.message}`);
+            }
+        }
+
+        // Utility Functions
+        function showMessage(type, text) {
+            // Would implement a toast notification system
+            console.log(`[${type}] ${text}`);
+        }
+
+        function downloadFile(blob, filename) {
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>

@@ -30,6 +30,7 @@ from enhanced_coverage import (
     export_missing_timesheets,
     export_failed_validations
 )
+from labour_hours_report import generate_labour_hours_report, generate_html_report as generate_labour_html
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)  # For session management
@@ -874,6 +875,52 @@ def generate_coverage():
 
     except Exception as e:
         log_message(f"❌ Coverage report error: {str(e)}")
+        import traceback
+        log_message(traceback.format_exc())
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/labour-hours', methods=['POST'])
+def generate_labour_hours():
+    """Generate labour hours report for Clarity month"""
+    try:
+        data = request.json
+        clarity_month = data.get('month')
+
+        log_message(f"📊 Generating labour hours report for {clarity_month}...")
+
+        month_config = next((m for m in clarity_months if m['id'] == clarity_month), None)
+        if not month_config:
+            log_message(f"❌ Invalid Clarity month: {clarity_month}")
+            return jsonify({'success': False, 'error': 'Invalid Clarity month'}), 400
+
+        # Generate labour hours report
+        log_message("⏱️  Calculating weekly hours from database...")
+        report_data = generate_labour_hours_report(
+            clarity_month=clarity_month,
+            table_name=DYNAMODB_TABLE,
+            profile_name=None,  # Using default credentials
+            region=AWS_REGION
+        )
+
+        log_message(f"✅ Labour hours report generated")
+        log_message(f"   Total hours: {report_data['statistics']['total_hours_logged']:.1f}")
+        log_message(f"   Team members: {report_data['statistics']['total_team_members']}")
+        log_message(f"   Weeks: {report_data['statistics']['total_weeks']}")
+
+        # Generate HTML
+        html = generate_labour_html(report_data)
+
+        log_message(f"📄 HTML report generated successfully")
+
+        return jsonify({
+            'success': True,
+            'html': html,
+            'stats': report_data['statistics']
+        })
+
+    except Exception as e:
+        log_message(f"❌ Labour hours report error: {str(e)}")
         import traceback
         log_message(traceback.format_exc())
         return jsonify({'success': False, 'error': str(e)}), 500
